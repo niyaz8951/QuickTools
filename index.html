@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/global.css">
+  <title>Thinkneering — tools that shorten office work</title>
+  <meta name="description" content="Two browser tools for engineering office work: turn a specification PDF into a compliance matrix, and work out how many containers a shipment needs.">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header data-site-header></header>
+
+  <main id="main" class="wrap">
+    <section class="hero">
+      <p class="eyebrow">Two tools, no account</p>
+      <h1>Tools that shorten <em>office work</em>.</h1>
+      <p class="hero__lede">Open a tool and start working. Nothing is uploaded anywhere —
+        both tools run entirely in your browser.</p>
+    </section>
+
+    <section class="section-block" aria-labelledby="tools-title">
+      <div class="section-block__head"><h2 id="tools-title">Tools</h2></div>
+      <div class="grid" id="tools"></div>
+    </section>
+  </main>
+
+  <footer data-site-footer></footer>
+  <script src="assets/js/global.js"></script>
+  <script>
+  (function () {
+    'use strict';
+    var TOOLS = [
+      {
+        href: 'tools/compliance-maker/',
+        icon: 'file-check',
+        title: 'Compliance Maker',
+        desc: 'Turn a specification PDF, or pasted text, into a numbered compliance matrix with the formatting already done. Exports to Excel.'
+      },
+      {
+        href: 'tools/container-calculator/',
+        icon: 'container',
+        title: 'Container Calculator',
+        desc: 'Work out how many containers or trailers a shipment needs, with a load plan, stowage drawings and a PDF report.'
+      }
+    ];
+
+    document.addEventListener('tn:ready', function () {
+      TN.el('#tools').innerHTML = TOOLS.map(function (t) {
+        return '<a class="card" href="' + TN.esc(TN.base + t.href) + '">' +
+          '<span class="card__icon">' + TN.icon(t.icon, 20) + '</span>' +
+          '<span class="card__title">' + TN.esc(t.title) + '</span>' +
+          '<span class="card__desc">' + TN.esc(t.desc) + '</span>' +
+          '</a>';
+      }).join('');
+    });
+  })();
+  </script>
+</body>
+</html>
