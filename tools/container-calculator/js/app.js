@@ -500,10 +500,27 @@ function loadLimitFor(pal) {
  * Anything too large for the deck is not palletised at all — it is packed
  * loose, which is what actually happens to an AHU section on a job site.
  */
+/* Returns the winning grid, not just the count. The drawing renders this
+   exact arrangement, so if only the total came back the picture would show a
+   layout the calculation never chose. */
+function tileLayout(item, pal) {
+  const straight = {
+    cols: Math.floor(pal.length / item.length),
+    rows: Math.floor(pal.width / item.width),
+    l: item.length, w: item.width, rotated: false,
+  };
+  const turned = {
+    cols: Math.floor(pal.length / item.width),
+    rows: Math.floor(pal.width / item.length),
+    l: item.width, w: item.length, rotated: true,
+  };
+  straight.perLayer = straight.cols * straight.rows;
+  turned.perLayer = turned.cols * turned.rows;
+  return turned.perLayer > straight.perLayer ? turned : straight;
+}
+
 function tilePerLayer(item, pal) {
-  const a = Math.floor(pal.length / item.length) * Math.floor(pal.width / item.width);
-  const b = Math.floor(pal.length / item.width) * Math.floor(pal.width / item.length);
-  return Math.max(a, b);
+  return tileLayout(item, pal).perLayer;
 }
 
 function palletise(items) {
@@ -528,7 +545,8 @@ function palletise(items) {
       continue;
     }
 
-    const perLayer = tilePerLayer(item, pal);
+    const layout = tileLayout(item, pal);
+    const perLayer = layout.perLayer;
     const layersByHeight = item.stackable ? Math.max(1, Math.floor(maxLoadH / item.height)) : 1;
     const byHeight = perLayer * layersByHeight;
     const limitKg = loadLimitFor(pal);
@@ -538,6 +556,9 @@ function palletise(items) {
     const full = Math.floor(qty / perPallet);
     const remainder = qty % perPallet;
 
+    /* `pallet` rides along with the unit so the drawings can open the box up
+       again: deck outline, then the individual units in their real grid. It
+       is carried through the packer untouched and lands on the placement. */
     const makeUnit = (count, palletQty, partial) => ({
       ...item,
       tag: `${item.tag || 'Item'} on ${pal.name}${partial ? ' (part)' : ''}`,
@@ -546,6 +567,19 @@ function palletise(items) {
       height: pal.deck + Math.ceil(count / perLayer) * item.height,
       weight: pal.weight + count * each,
       qty: palletQty,
+      pallet: {
+        name: pal.name,
+        deckL: pal.length,
+        deckW: pal.width,
+        deck: pal.deck,
+        count,
+        perLayer,
+        cols: layout.cols,
+        rows: layout.rows,
+        itemL: layout.l,
+        itemW: layout.w,
+        itemH: item.height,
+      },
     });
 
     if (full > 0) units.push(makeUnit(perPallet, full, false));

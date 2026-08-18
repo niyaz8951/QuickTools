@@ -59,6 +59,74 @@ function vehicleCorners(v) {
 }
 
 /** 3D isometric view of one loaded vehicle. */
+/* ------------------------------------------------------------------ *
+ * Pallet contents
+ *
+ * A palletised placement is one box to the packer but two things to the eye:
+ * the deck, and the units standing on it. These helpers reopen the box so the
+ * drawings can show the deck as a dotted outline with the real units inside,
+ * in their row colour.
+ *
+ * The grid drawn here is the grid the calculation chose — cols, rows and the
+ * item orientation all come from the packing, never re-derived — so the
+ * picture cannot disagree with the numbers.
+ * ------------------------------------------------------------------ */
+
+/* Above this many individual units in one drawing, the contents are dropped
+   and pallets render as solid boxes.
+   Two reasons for the ceiling, and the tighter one is legibility: past roughly
+   this many units each one is a couple of pixels in a 520-wide drawing and the
+   picture says less than plain blocks would. Weight is the second — each unit
+   costs about 700 bytes of SVG across its three faces, so 200 units is around
+   140 KB per view, and every load has two views that also go into the PDF. */
+const MAX_DRAWN_UNITS = 200;
+
+function palletUnitCount(load) {
+  let n = 0;
+  for (const p of load.placements) if (p.pallet && !p.tilted) n += p.pallet.count;
+  return n;
+}
+
+/* Deck rectangle and unit boxes for one placement, in vehicle coordinates.
+   Returns null when the placement is not a pallet, or was tilted on its side
+   by the packer — a pallet on its side has no meaningful layer grid, so it
+   stays a solid block. */
+function palletParts(p) {
+  if (!p.pallet || p.tilted) return null;
+  const q = p.pallet;
+
+  /* The packer may have turned the pallet 90 degrees. Work out which way it
+     went by seeing which deck edge the placed footprint matches, then swap
+     the whole grid to suit. */
+  const turned = Math.abs(p.l - q.deckW) < Math.abs(p.l - q.deckL);
+  const deckL = turned ? q.deckW : q.deckL;
+  const deckW = turned ? q.deckL : q.deckW;
+  const cols = turned ? q.rows : q.cols;
+  const rows = turned ? q.cols : q.rows;
+  const itemL = turned ? q.itemW : q.itemL;
+  const itemW = turned ? q.itemL : q.itemW;
+
+  // Centre the deck in the placed footprint; the surplus is handling clearance.
+  const ox = p.x + (p.l - deckL) / 2;
+  const oy = p.y + (p.w - deckW) / 2;
+
+  const deck = { x: ox, y: oy, z: p.z, l: deckL, w: deckW, h: q.deck };
+
+  const units = [];
+  let left = q.count;
+  const layers = Math.ceil(q.count / q.perLayer);
+  for (let layer = 0; layer < layers && left > 0; layer++) {
+    const z = p.z + q.deck + layer * q.itemH;
+    for (let r = 0; r < rows && left > 0; r++) {
+      for (let c = 0; c < cols && left > 0; c++) {
+        units.push({ x: ox + c * itemL, y: oy + r * itemW, z, l: itemL, w: itemW, h: q.itemH });
+        left--;
+      }
+    }
+  }
+  return { deck, units };
+}
+
 export function isoScene(load, vehicle, { width = 520, height = 330, pad = 20, labels = true } = {}) {
   const scene = newScene(width, height);
   const fit = fitter(vehicleCorners(vehicle), width, height, pad);
@@ -76,17 +144,36 @@ export function isoScene(load, vehicle, { width = 520, height = 330, pad = 20, l
   for (let y = 1; y < W - 1e-6; y += 1) scene.line(P(0, y, 0), P(L, y, 0), { color: 'border', width: 0.4 });
 
   // Cargo, far to near.
+  const showContents = palletUnitCount(load) <= MAX_DRAWN_UNITS;
   const sorted = [...load.placements].sort((a, b) => (a.x + a.y + a.z) - (b.x + b.y + b.z));
+
+  /* One box, three visible faces: top, near end, near side. */
+  const box = (b, c, opts = {}) => {
+    const x0 = b.x; const x1 = b.x + b.l;
+    const y0 = b.y; const y1 = b.y + b.w;
+    const z0 = b.z; const z1 = b.z + b.h;
+    const common = { stroke: opts.stroke || 'surface', strokeWidth: opts.strokeWidth || 0.5, dash: opts.dash || null, opacity: opts.opacity };
+    scene.poly([P(x0, y0, z1), P(x1, y0, z1), P(x1, y1, z1), P(x0, y1, z1)], { fill: c, shade: 1, ...common });
+    scene.poly([P(x1, y0, z0), P(x1, y1, z0), P(x1, y1, z1), P(x1, y0, z1)], { fill: c, shade: 0.78, ...common });
+    scene.poly([P(x0, y1, z0), P(x1, y1, z0), P(x1, y1, z1), P(x0, y1, z1)], { fill: c, shade: 0.58, ...common });
+  };
+
   for (const p of sorted) {
     const c = tokenFor(p.rowIndex);
-    const x0 = p.x; const x1 = p.x + p.l;
-    const y0 = p.y; const y1 = p.y + p.w;
-    const z0 = p.z; const z1 = p.z + p.h;
-    scene.poly([P(x0, y0, z1), P(x1, y0, z1), P(x1, y1, z1), P(x0, y1, z1)], { fill: c, shade: 1, stroke: 'surface', strokeWidth: 0.5 });
-    scene.poly([P(x1, y0, z0), P(x1, y1, z0), P(x1, y1, z1), P(x1, y0, z1)], { fill: c, shade: 0.78, stroke: 'surface', strokeWidth: 0.5 });
-    scene.poly([P(x0, y1, z0), P(x1, y1, z0), P(x1, y1, z1), P(x0, y1, z1)], { fill: c, shade: 0.58, stroke: 'surface', strokeWidth: 0.5 });
+    const parts = showContents ? palletParts(p) : null;
+
+    if (parts) {
+      /* Deck first, in muted timber tones with a dotted edge, then the units
+         standing on it painted far-to-near so the near ones overlap correctly. */
+      box(parts.deck, 'text-muted', { stroke: 'text-muted', strokeWidth: 0.7, dash: [2.5, 2], opacity: 0.55 });
+      const near = [...parts.units].sort((a, b) => (a.x + a.y + a.z) - (b.x + b.y + b.z));
+      for (const u of near) box(u, c, { strokeWidth: 0.4 });
+    } else {
+      box(p, c);
+    }
+
     if (labels) {
-      const mid = P((x0 + x1) / 2, (y0 + y1) / 2, z1);
+      const mid = P(p.x + p.l / 2, p.y + p.w / 2, p.z + p.h);
       scene.label(mid[0], mid[1] + 3, String(p.no), { size: 8, color: 'surface', align: 'center', weight: 'bold' });
     }
   }
@@ -115,21 +202,41 @@ export function planScene(load, vehicle, { width = 520, height = 190, pad = 26, 
   scene.poly([P(0, 0), P(L, 0), P(L, W), P(0, W)], { fill: 'bg', shade: 1, stroke: 'border', strokeWidth: 0.8 });
 
   // Lowest tier solid, anything stacked above outlined so both stay readable.
+  const showContents = palletUnitCount(load) <= MAX_DRAWN_UNITS;
   const sorted = [...load.placements].sort((a, b) => a.z - b.z);
   for (const p of sorted) {
     const c = tokenFor(p.rowIndex);
     const upper = p.z > 1e-6;
-    scene.poly([P(p.x, p.y), P(p.x + p.l, p.y), P(p.x + p.l, p.y + p.w), P(p.x, p.y + p.w)], {
-      fill: c,
-      shade: upper ? 1 : 0.9,
-      opacity: upper ? 0.45 : 1,
-      stroke: upper ? c : 'surface',
-      strokeWidth: upper ? 1 : 0.6,
-      dash: upper ? [2, 2] : null,
-    });
+    const parts = showContents ? palletParts(p) : null;
+
+    if (parts) {
+      // Deck outline dotted, then one layer of units seen from above.
+      const d = parts.deck;
+      scene.poly([P(d.x, d.y), P(d.x + d.l, d.y), P(d.x + d.l, d.y + d.w), P(d.x, d.y + d.w)], {
+        fill: 'bg', shade: 1, opacity: upper ? 0.3 : 0.7,
+        stroke: 'text-muted', strokeWidth: 0.9, dash: [2.5, 2],
+      });
+      const top = parts.units.filter((u) => Math.abs(u.z - parts.units[0].z) < 1e-6);
+      for (const u of top) {
+        scene.poly([P(u.x, u.y), P(u.x + u.l, u.y), P(u.x + u.l, u.y + u.w), P(u.x, u.y + u.w)], {
+          fill: c, shade: upper ? 1 : 0.9, opacity: upper ? 0.45 : 1,
+          stroke: 'surface', strokeWidth: 0.4,
+        });
+      }
+    } else {
+      scene.poly([P(p.x, p.y), P(p.x + p.l, p.y), P(p.x + p.l, p.y + p.w), P(p.x, p.y + p.w)], {
+        fill: c,
+        shade: upper ? 1 : 0.9,
+        opacity: upper ? 0.45 : 1,
+        stroke: upper ? c : 'surface',
+        strokeWidth: upper ? 1 : 0.6,
+        dash: upper ? [2, 2] : null,
+      });
+    }
+
     if (labels) {
       const mid = P(p.x + p.l / 2, p.y + p.w / 2);
-      scene.label(mid[0], mid[1] + 3, String(p.no), { size: 8, color: upper ? 'text' : 'surface', align: 'center', weight: 'bold' });
+      scene.label(mid[0], mid[1] + 3, String(p.no), { size: 8, color: upper || parts ? 'text' : 'surface', align: 'center', weight: 'bold' });
     }
   }
 

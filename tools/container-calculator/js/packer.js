@@ -215,6 +215,9 @@ function expandUnits(items, gap) {
         h: Number(item.height),
         weight: Number(item.weight) || 0,
         stackable: item.stackable !== false,
+        // Pallet contents, when the caller palletised first. Opaque to the
+        // packer — carried so the drawings can show what is on the deck.
+        pallet: item.pallet || null,
         volume: Number(item.length) * Number(item.width) * Number(item.height),
       });
     }
@@ -293,6 +296,7 @@ function tryPlace(bin, unit, opt) {
     rawL: unit.rawL, rawW: unit.rawW, rawH: unit.rawH,
     weight: unit.weight,
     stackable: unit.stackable,
+    pallet: unit.pallet,
     tilted: Math.abs(c.h - unit.h) > 1e-6,
   });
   bin.weight = round(bin.weight + unit.weight, 3);
