@@ -60,6 +60,14 @@ export const STRATEGY_LABELS = {
  * very large manifests fall back to the two strongest rules to keep the
  * page responsive while typing.
  */
+/* How many packing passes a run will take. The progress bar needs this to
+   weight its two phases honestly — the fleet comparison is usually the more
+   expensive half, and guessing 50/50 would make the bar stall at the midpoint. */
+export function strategyCount(items, budget) {
+  const pieces = items.reduce((s, i) => s + Math.max(1, Math.round(Number(i.qty) || 1)), 0);
+  return strategiesFor(pieces, budget).length;
+}
+
 function strategiesFor(pieces, budget) {
   if (budget === 'single') return ['volume'];
   if (pieces > 260 || budget === 'fast') return ['volume', 'footprint'];
@@ -112,11 +120,19 @@ export const VEHICLE_PRESETS = [
  * pallet's own weight counts against the vehicle payload.
  * ------------------------------------------------------------------ */
 export const PALLET_PRESETS = [
-  { id: 'eur1', name: 'EUR 1 / EPAL (1200 × 800)',  length: 1.200, width: 0.800, deck: 0.144, weight: 25, region: 'Europe' },
-  { id: 'eur2', name: 'EUR 2 industrial (1200 × 1000)', length: 1.200, width: 1.000, deck: 0.162, weight: 28, region: 'Europe' },
-  { id: 'gma',  name: 'GMA 48 × 40 in (1219 × 1016)', length: 1.219, width: 1.016, deck: 0.145, weight: 17, region: 'North America' },
-  { id: 'iso',  name: 'ISO / Asia (1100 × 1100)',   length: 1.100, width: 1.100, deck: 0.150, weight: 23, region: 'Asia' },
-  { id: 'au',   name: 'Australian (1165 × 1165)',   length: 1.165, width: 1.165, deck: 0.150, weight: 40, region: 'Australia' },
+  { id: 'eur1', name: 'EUR 1 / EPAL (1200 × 800)',  length: 1.200, width: 0.800, deck: 0.144, weight: 25, swl: 1500, region: 'Europe' },
+  { id: 'eur2', name: 'EUR 2 industrial (1200 × 1000)', length: 1.200, width: 1.000, deck: 0.162, weight: 28, swl: 1500, region: 'Europe' },
+  { id: 'gma',  name: 'GMA 48 × 40 in (1219 × 1016)', length: 1.219, width: 1.016, deck: 0.145, weight: 17, swl: 1250, region: 'North America' },
+  { id: 'iso',  name: 'ISO / Asia (1100 × 1100)',   length: 1.100, width: 1.100, deck: 0.150, weight: 23, swl: 1200, region: 'Asia' },
+  /* Heavy-duty timber skids of the kind used for FCU and coil shipments out
+     of China. These are NOT a GB/T standard size — the Chinese standards are
+     1200 x 1000 and 1100 x 1100, same as the ISO sizes above. Deck height,
+     deadweight and safe working load are therefore estimates for a skid of
+     this footprint, not published figures: confirm them with your supplier
+     and edit if they differ. */
+  { id: 'cn2015', name: 'China skid (2000 × 1500)', length: 2.000, width: 1.500, deck: 0.150, weight: 60, swl: 2000, region: 'China' },
+  { id: 'cn2020', name: 'China skid (2000 × 2000)', length: 2.000, width: 2.000, deck: 0.150, weight: 80, swl: 2500, region: 'China' },
+  { id: 'au',   name: 'Australian (1165 × 1165)',   length: 1.165, width: 1.165, deck: 0.150, weight: 40, swl: 2000, region: 'Australia' },
 ];
 
 /* Space a forklift needs around a palletised load to place and pick it
@@ -306,7 +322,10 @@ function tryPlace(bin, unit, opt) {
  * Pack items using one specific ordering.
  * @returns {Object} loading plan for that ordering
  */
-function packOnce(items, vehicle, opt, strategy) {
+/* `tick` is called with a 0-1 fraction as placement proceeds. It fires every
+   64 units rather than every unit: the callback crosses a postMessage boundary
+   in the worker, and reporting 12,000 times would cost more than the packing. */
+function packOnce(items, vehicle, opt, strategy, tick) {
   const units = expandUnits(items, opt.gap);
   const rejected = [];
   const shippable = [];
@@ -326,7 +345,9 @@ function packOnce(items, vehicle, opt, strategy) {
   shippable.sort(SORT_STRATEGIES[strategy] || SORT_STRATEGIES.volume);
 
   const bins = [];
-  for (const u of shippable) {
+  for (let idx = 0; idx < shippable.length; idx++) {
+    const u = shippable[idx];
+    if (tick && (idx & 63) === 0) tick(idx / shippable.length);
     let done = false;
     for (const bin of bins) {
       if (tryPlace(bin, u, opt)) { done = true; break; }
@@ -373,7 +394,10 @@ function packOnce(items, vehicle, opt, strategy) {
 
   return {
     vehicle,
-    options: opt,
+    /* onProgress is stripped: the plan is posted back across a worker
+       boundary, and structuredClone throws on a function. Callers that read
+       plan.options want the packing settings, never the callback. */
+    options: { ...opt, onProgress: undefined },
     strategy,
     loads,
     rejected,
@@ -405,17 +429,21 @@ function packOnce(items, vehicle, opt, strategy) {
  */
 export function packItems(items, vehicle, options = {}) {
   const opt = { ...DEFAULT_OPTIONS, ...options };
+  const report = typeof opt.onProgress === 'function' ? opt.onProgress : null;
 
   if (opt.sortBy && SORT_STRATEGIES[opt.sortBy]) {
-    return packOnce(items, vehicle, opt, opt.sortBy);
+    return packOnce(items, vehicle, opt, opt.sortBy, report);
   }
 
   const pieces = items.reduce((s, i) => s + Math.max(1, Math.round(Number(i.qty) || 1)), 0);
   const tried = strategiesFor(pieces, opt.budget);
 
   let best = null;
-  for (const strategy of tried) {
-    const plan = packOnce(items, vehicle, opt, strategy);
+  for (let si = 0; si < tried.length; si++) {
+    const strategy = tried[si];
+    // Each strategy owns an equal slice of the reported progress.
+    const plan = packOnce(items, vehicle, opt, strategy,
+      report ? (f) => report((si + f) / tried.length) : null);
     // Fewest vehicles wins; on a tie prefer the tighter pack.
     const better = !best
       || plan.summary.vehicles < best.summary.vehicles
@@ -424,6 +452,7 @@ export function packItems(items, vehicle, options = {}) {
     if (better) best = plan;
   }
   best.summary.strategiesTried = tried.length;
+  if (report) report(1);
   return best;
 }
 
@@ -435,9 +464,17 @@ export function packItems(items, vehicle, options = {}) {
  * chosen vehicle still gets the full search in packItems.
  */
 export function compareFleet(items, options = {}, presets = VEHICLE_PRESETS) {
+  const report = typeof options.onProgress === 'function' ? options.onProgress : null;
   return presets
-    .map((v) => {
-      const plan = packItems(items, v, { ...options, budget: 'fast' });
+    .map((v, vi) => {
+      /* onProgress is replaced, not forwarded: the inner packItems would
+         otherwise report its own 0-1 once per preset and the bar would
+         restart twelve times. */
+      const plan = packItems(items, v, {
+        ...options,
+        budget: 'fast',
+        onProgress: report ? (f) => report((vi + f) / presets.length) : undefined,
+      });
       return {
         id: v.id,
         name: v.name,

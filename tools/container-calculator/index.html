@@ -97,6 +97,16 @@
           <input id="pallet-clearance" type="number" min="0" max="300" step="5" inputmode="numeric" value="100">
           <p class="hint">Space a forklift needs around each pallet. SEMA guidance is 75–100 mm.</p>
         </div>
+        <div class="field">
+          <label for="pallet-load-h">Max load height (mm)</label>
+          <input id="pallet-load-h" type="number" min="50" step="10" inputmode="numeric" value="1800">
+          <p class="hint">Goods height above the deck. Caps how many layers are stacked.</p>
+        </div>
+        <div class="field">
+          <label for="pallet-load-kg">Max load per pallet (kg)</label>
+          <input id="pallet-load-kg" type="number" min="1" step="10" inputmode="numeric" value="1500">
+          <p class="hint">Safe working load. Adopted from the pallet type; override for your own.</p>
+        </div>
         <div class="field cc-pallet-custom" id="pallet-custom" hidden>
           <label for="pallet-l">Deck length (mm)</label>
           <input id="pallet-l" type="number" min="100" step="1" inputmode="numeric" value="1200">
@@ -106,6 +116,8 @@
           <input id="pallet-h" type="number" min="10" step="1" inputmode="numeric" value="144">
           <label for="pallet-kg">Pallet weight (kg)</label>
           <input id="pallet-kg" type="number" min="0" step="0.5" inputmode="decimal" value="25">
+          <label for="pallet-swl">Safe working load (kg)</label>
+          <input id="pallet-swl" type="number" min="1" step="50" inputmode="numeric" value="1500">
         </div>
         <p class="hint cc-pallet-note" id="pallet-note"></p>
       </fieldset>
@@ -135,6 +147,19 @@
       <div class="toolbar cc-run" role="group" aria-label="Calculation">
         <button type="button" class="btn btn--primary" id="run-btn" disabled>Calculate</button>
         <span class="cc-run__note" id="run-note" role="status" aria-live="polite"></span>
+      </div>
+
+      <!-- Shown only while a pack is running. The packing itself happens in a
+           worker, so this bar keeps painting and Cancel stays clickable. -->
+      <div class="cc-progress" id="progress" hidden>
+        <div class="cc-progress__row">
+          <div class="cc-bar" role="progressbar" id="progress-bar"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+               aria-labelledby="progress-text"><span id="progress-fill"></span></div>
+          <span class="cc-progress__pct" id="progress-pct">0%</span>
+          <button type="button" class="btn btn--ghost btn--sm" id="cancel-btn">Cancel</button>
+        </div>
+        <p class="cc-progress__text" id="progress-text" role="status" aria-live="polite">Starting…</p>
       </div>
 
       <div class="cc-units">

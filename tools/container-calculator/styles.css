@@ -357,3 +357,50 @@
 
 .cc-pallet-note { grid-column: 1 / -1; }
 .cc-pallet-note.is-warn { color: var(--color-warning); }
+
+/* ------------------------------------------------------------------ *
+ * Progress
+ *
+ * Replaces the Calculate button while a pack runs, in the same spot, so
+ * the eye does not have to hunt for the thing that changed.
+ * ------------------------------------------------------------------ */
+
+.cc-progress {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.cc-progress__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cc-progress .cc-bar { flex: 1 1 auto; }
+
+.cc-progress__pct {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  min-width: 4ch;               /* stops the row jittering as digits change */
+  text-align: right;
+}
+
+.cc-progress__text {
+  margin-top: var(--space-2);
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+/* The fill is driven from JS in whole percent; the transition smooths the
+   step between updates so it reads as motion rather than a stutter. */
+.cc-progress #progress-fill { transition: width .12s linear; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-progress #progress-fill { transition: none; }
+}
+
+@media (max-width: 560px) {
+  .cc-progress__row { flex-wrap: wrap; }
+  .cc-progress .cc-bar { flex: 1 1 100%; order: -1; }
+}

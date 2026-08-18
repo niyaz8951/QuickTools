@@ -19,7 +19,9 @@ const state = {
   unit: 'm',
   options: { allowStacking: true, allowTilt: false, gap: 0.1 },
   pallet: { on: false, type: 'eur1', clearance: DEFAULT_PALLET_CLEARANCE,
-            custom: { length: 1.2, width: 0.8, deck: 0.144, weight: 25 } },
+            maxLoadHeight: 1.8,   // goods height above the deck
+            maxLoad: 1500,        // safe working load of the pallet
+            custom: { length: 1.2, width: 0.8, deck: 0.144, weight: 25, swl: 1500 } },
   items: [],   // dimensions always stored in metres
 };
 
@@ -167,23 +169,49 @@ function syncPalletPanel() {
   setValue('#pallet-h', Math.round(state.pallet.custom.deck * 1000));
   setValue('#pallet-kg', state.pallet.custom.weight);
 
+  setValue('#pallet-load-h', Math.round(state.pallet.maxLoadHeight * 1000));
+  setValue('#pallet-load-kg', state.pallet.maxLoad);
+  setValue('#pallet-swl', state.pallet.custom.swl);
+
   if (!state.pallet.on) return;
   const pal = activePallet();
   const mm = (m) => Math.round(m * 1000);
   $('#pallet-hint').textContent =
     `Deck ${mm(pal.length)} × ${mm(pal.width)} mm · ${mm(pal.deck)} mm high · ${pal.weight} kg each.`;
+  syncPalletNote();
+}
 
-  /* Overhang is worth naming rather than silently packing: cargo wider than
-     its deck gets damaged in handling and will not go into racking. */
-  const { overhang } = palletise(usableItems());
+/* The tiling summary depends on the CARGO as much as on the pallet, so it is
+   refreshed on every cargo edit too — not only when a pallet control changes.
+   Kept separate from syncPalletPanel so a keystroke in the cargo table does
+   not rewrite every field in the panel. */
+function syncPalletNote() {
+  if (!state.pallet.on) return;
+
+  /* Show the tiling result per row. This is the number an engineer actually
+     checks against the shop floor, so it is on screen before Calculate rather
+     than buried in the results. */
+  const { report, loose } = palletise(usableItems());
   const note = $('#pallet-note');
-  if (overhang.length) {
-    note.textContent = `${overhang.length} row(s) are larger than the pallet deck and will overhang: ${overhang.slice(0, 3).join(', ')}${overhang.length > 3 ? '…' : ''}. They are still packed, using their own footprint.`;
-    note.classList.add('is-warn');
-  } else {
-    note.textContent = 'Each item is packed on its own pallet position. Pre-built pallets should be entered as the item itself.';
+  const packed = report.filter((r) => !r.loose);
+  const totalPallets = packed.reduce((s, r) => s + r.pallets, 0);
+
+  if (!report.length) {
+    note.textContent = 'Add cargo to see how it tiles onto the pallet.';
     note.classList.remove('is-warn');
+    return;
   }
+
+  const lines = packed.slice(0, 4).map((r) =>
+    `${r.tag}: ${r.perLayer} per layer × ${r.layers} layer${r.layers === 1 ? '' : 's'} = ${r.perPallet} per pallet → ${r.pallets} pallet${r.pallets === 1 ? '' : 's'} (limited by ${r.limitedBy})`);
+  if (packed.length > 4) lines.push(`…and ${packed.length - 4} more row(s).`);
+
+  let text = `${totalPallets} pallet${totalPallets === 1 ? '' : 's'} in total. ` + lines.join(' · ');
+  if (loose.length) {
+    text += ` — ${loose.length} row(s) are larger than the deck and ship loose, not palletised.`;
+  }
+  note.textContent = text;
+  note.classList.toggle('is-warn', loose.length > 0);
 }
 
 function syncSetupPanel() {
@@ -329,8 +357,12 @@ let stale = false;
 
 function markStale() {
   updateCounts();
+  syncPalletNote();   // the tiling depends on the cargo that just changed
   save();
   stale = true;
+  /* A run in flight is now computing the wrong answer, so drop it rather
+     than let it finish and overwrite the panel with stale numbers. */
+  if (worker) stopWorker();
   syncRunButton();
 }
 
@@ -366,42 +398,144 @@ function activePallet() {
   return PALLET_PRESETS.find((p) => p.id === state.pallet.type) || PALLET_PRESETS[0];
 }
 
-/* Turn a cargo list into a palletised one.
+/* Picking a pallet type adopts its safe working load, unless the user has
+   already overridden it for this pallet. */
+function adoptPalletLimits() {
+  const pal = activePallet();
+  if (pal.swl) state.pallet.maxLoad = pal.swl;
+}
+
+/* Build loaded pallets, then hand those to the container packer.
  *
- * Each item becomes an item-on-a-pallet: the footprint grows to at least the
- * pallet deck, the deck height is added on top, the pallet's own deadweight
- * counts against the vehicle payload, and the handling clearance is added
- * around the footprint so a forklift can place and pick it.
+ * This is a two-stage calculation and the stages are genuinely different:
  *
- * NOTE — this is one item per pallet position. It does not build mixed
- * pallets or work out how many cartons tile onto a deck; if you are shipping
- * 500 small boxes, palletise them yourself and enter the built pallet as the
- * item. Turning cartons into pallet loads is a different calculation and
- * pretending to do it here would produce confident nonsense.
+ *   1. TILE  — how many units sit on one deck. Units are laid out in a grid,
+ *              trying the deck both ways round and keeping whichever fits
+ *              more. Layers are added while the item is stackable and the
+ *              load height and safe working load both allow it.
+ *   2. PACK  — each loaded pallet becomes one solid box (deck footprint +
+ *              handling clearance, deck height + load height, pallet weight +
+ *              contents) and those boxes go to the vehicle packer.
+ *
+ * Two limits worth knowing, because they are standard practice rather than
+ * shortcuts:
+ *
+ *   - ONE ITEM TYPE PER PALLET. Mixed pallets are built to a packing list, not
+ *     to a formula, and guessing at them would be worse than not offering it.
+ *     An uneven quantity produces one part-filled pallet at the end.
+ *   - GRID PATTERNS ONLY. Interlocked layouts (pinwheel, brick) can gain a
+ *     unit or two on some footprints. They are not computed here, so a real
+ *     pallet may hold slightly more than this says. It will not hold less.
+ *
+ * Anything too large for the deck is not palletised at all — it is packed
+ * loose, which is what actually happens to an AHU section on a job site.
  */
+function tilePerLayer(item, pal) {
+  const a = Math.floor(pal.length / item.length) * Math.floor(pal.width / item.width);
+  const b = Math.floor(pal.length / item.width) * Math.floor(pal.width / item.length);
+  return Math.max(a, b);
+}
+
 function palletise(items) {
   const pal = activePallet();
   const clear = Math.max(0, state.pallet.clearance || 0);
-  const overhang = [];
+  const maxLoadH = Math.max(0.01, state.pallet.maxLoadHeight || 1.8);
+  const maxLoadKg = Math.max(1, state.pallet.maxLoad || pal.swl || 1500);
 
-  const out = items.map((i) => {
-    if (i.length > pal.length + 1e-6 || i.width > pal.width + 1e-6) overhang.push(i.tag || 'untitled row');
-    return {
-      ...i,
-      // Cargo narrower than the deck still occupies a full pallet position.
-      length: Math.max(i.length, pal.length) + clear,
-      width: Math.max(i.width, pal.width) + clear,
-      height: i.height + pal.deck,
-      weight: (Number(i.weight) || 0) + pal.weight,
-    };
-  });
-  return { items: out, overhang, pallet: pal, clearance: clear };
+  const units = [];
+  const loose = [];
+  const report = [];
+
+  for (const item of items) {
+    const qty = Math.max(1, Math.round(Number(item.qty) || 1));
+    const each = Number(item.weight) || 0;
+    const perLayer = tilePerLayer(item, pal);
+
+    if (perLayer < 1) {
+      // Bigger than the deck in both orientations — ship it loose.
+      loose.push(item);
+      report.push({ tag: item.tag || 'untitled', loose: true });
+      continue;
+    }
+
+    const layersByHeight = item.stackable
+      ? Math.max(1, Math.floor(maxLoadH / item.height))
+      : 1;
+    const byHeight = perLayer * layersByHeight;
+    const byWeight = each > 0 ? Math.max(1, Math.floor(maxLoadKg / each)) : Infinity;
+    const perPallet = Math.max(1, Math.min(byHeight, byWeight, qty));
+
+    const full = Math.floor(qty / perPallet);
+    const remainder = qty % perPallet;
+
+    const makeUnit = (count, palletQty) => ({
+      ...item,
+      tag: `${item.tag || 'Item'} on ${pal.name}${count < perPallet ? ' (part)' : ''}`,
+      length: pal.length + clear,
+      width: pal.width + clear,
+      height: pal.deck + Math.ceil(count / perLayer) * item.height,
+      weight: pal.weight + count * each,
+      qty: palletQty,
+    });
+
+    if (full > 0) units.push(makeUnit(perPallet, full));
+    if (remainder > 0) units.push(makeUnit(remainder, 1));
+
+    report.push({
+      tag: item.tag || 'untitled',
+      perLayer,
+      layers: Math.ceil(perPallet / perLayer),
+      perPallet,
+      pallets: full + (remainder > 0 ? 1 : 0),
+      limitedBy: byWeight < byHeight ? 'weight' : (item.stackable ? 'height' : 'not stackable'),
+    });
+  }
+
+  return { items: units.concat(loose), report, loose, pallet: pal, clearance: clear };
 }
 
 /* What actually goes to the packer. */
 function itemsForPacking() {
   const items = usableItems();
   return state.pallet.on ? palletise(items).items : items;
+}
+
+let worker = null;
+let startedAt = 0;
+
+function showProgress(on) {
+  $('#progress').hidden = !on;
+  $('#run-btn').hidden = on;
+  if (on) setProgress(0, 'Starting…');
+}
+
+function setProgress(fraction, label) {
+  const pct = Math.round(fraction * 100);
+  $('#progress-fill').style.width = `${pct}%`;
+  $('#progress-bar').setAttribute('aria-valuenow', String(pct));
+  $('#progress-pct').textContent = `${pct}%`;
+  if (label) {
+    const secs = Math.round((Date.now() - startedAt) / 1000);
+    $('#progress-text').textContent = secs > 3 ? `${label} — ${secs}s` : label;
+  }
+}
+
+function stopWorker() {
+  if (worker) { worker.terminate(); worker = null; }
+  showProgress(false);
+  syncRunButton();
+}
+
+/* Results arrive either from the worker or from the synchronous fallback;
+   both land here so there is one place that renders. */
+function applyResult(nextPlan, nextFleet) {
+  plan = nextPlan;
+  numberPieces(plan);
+  fleet = nextFleet;
+  renderResults();
+  $('#pdf-btn').disabled = false;
+  $('#xlsx-btn').disabled = false;
+  stale = false;
 }
 
 function run() {
@@ -416,18 +550,57 @@ function run() {
     $('#pdf-btn').disabled = true;
     $('#xlsx-btn').disabled = true;
     stale = false;
+    stopWorker();
+    return;
+  }
+
+  if (worker) worker.terminate();
+  startedAt = Date.now();
+
+  /* Module workers need an http(s) origin and a reasonably current browser.
+     If either is missing, fall back to packing on the main thread — the tab
+     freezes as it used to, but the answer is still correct. */
+  try {
+    worker = new Worker(new URL('./packer-worker.js', import.meta.url), { type: 'module' });
+  } catch {
+    worker = null;
+  }
+
+  if (!worker) {
+    setStatusFallback();
+    applyResult(packItems(items, vehicle, state.options), compareFleet(items, state.options));
     syncRunButton();
     return;
   }
 
-  plan = packItems(items, vehicle, state.options);
-  numberPieces(plan);
-  fleet = compareFleet(items, state.options);   // `items` is already palletised when the option is on
-  renderResults();
-  $('#pdf-btn').disabled = false;
-  $('#xlsx-btn').disabled = false;
-  stale = false;
-  syncRunButton();
+  showProgress(true);
+
+  worker.onmessage = (e) => {
+    const msg = e.data;
+    if (msg.type === 'progress') {
+      setProgress(msg.fraction, msg.phase);
+    } else if (msg.type === 'done') {
+      applyResult(msg.plan, msg.fleet);
+      stopWorker();
+      notify(`Packed in ${(msg.ms / 1000).toFixed(1)}s.`);
+    } else if (msg.type === 'error') {
+      stopWorker();
+      notify(`The calculation failed: ${msg.message}`, true);
+    }
+  };
+
+  worker.onerror = (err) => {
+    stopWorker();
+    notify(`The calculation failed: ${err.message || 'worker error'}`, true);
+  };
+
+  worker.postMessage({ items, vehicle, options: state.options });
+}
+
+/* The fallback path cannot report progress — it blocks the thread it would
+   paint on — so it at least says so before it starts. */
+function setStatusFallback() {
+  notify('Calculating… the page will not respond until this finishes.');
 }
 
 /** Give every piece a stable number used by the drawings and the tables. */
@@ -981,6 +1154,19 @@ function init() {
 
   $('#pallet-type').addEventListener('change', (e) => {
     state.pallet.type = e.target.value;
+    adoptPalletLimits();
+    syncSetupPanel();
+    markStale();
+  });
+
+  $('#pallet-load-h').addEventListener('input', (e) => {
+    state.pallet.maxLoadHeight = Math.max(0.01, (Number(e.target.value) || 0) / 1000);
+    syncSetupPanel();
+    markStale();
+  });
+
+  $('#pallet-load-kg').addEventListener('input', (e) => {
+    state.pallet.maxLoad = Math.max(1, Number(e.target.value) || 1);
     syncSetupPanel();
     markStale();
   });
@@ -992,7 +1178,8 @@ function init() {
   });
 
   for (const [id, key, scale] of [['#pallet-l', 'length', 1000], ['#pallet-w', 'width', 1000],
-                                  ['#pallet-h', 'deck', 1000], ['#pallet-kg', 'weight', 1]]) {
+                                  ['#pallet-h', 'deck', 1000], ['#pallet-kg', 'weight', 1],
+                                  ['#pallet-swl', 'swl', 1]]) {
     $(id).addEventListener('input', (e) => {
       const value = Number(e.target.value);
       if (value >= 0) { state.pallet.custom[key] = value / scale; syncSetupPanel(); markStale(); }
@@ -1074,6 +1261,11 @@ function init() {
   });
 
   $('#run-btn').addEventListener('click', run);
+
+  $('#cancel-btn').addEventListener('click', () => {
+    stopWorker();
+    notify('Calculation cancelled.');
+  });
 
   /* A restored cargo list is restored as DATA, never as a calculation. This
      is the line that makes a heavy list survivable: reopening the page brings
