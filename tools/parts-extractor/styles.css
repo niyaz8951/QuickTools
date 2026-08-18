@@ -1,0 +1,88 @@
+/* Parts List Extractor — tool-scoped styles only.
+   Anything reusable belongs in global.css. */
+
+.pe-drop {
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  cursor: pointer;
+  background: var(--color-surface);
+  transition: border-color .15s, background-color .15s;
+}
+.pe-drop:hover,
+.pe-drop.is-dragover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-tint);
+}
+.pe-drop__title { font-family: var(--font-heading); font-weight: 600; margin-bottom: var(--space-1); }
+.pe-drop__hint { color: var(--color-text-muted); font-size: 0.8125rem; margin: 0; }
+
+.pe-files { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+
+.pe-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-2);
+  background: var(--color-surface);
+}
+.pe-file__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;   /* long workbook names have no spaces to break on */
+  font-size: 0.875rem;
+}
+.pe-file__size {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  flex: none;
+}
+
+.pe-check { margin-bottom: var(--space-3); }
+
+.pe-run {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  align-items: center;
+}
+.pe-run__note { font-size: 0.8125rem; color: var(--color-text-muted); }
+
+/* Extract is the only control that starts work, so it is sized to be found. */
+#run-btn { font-size: 1.0625rem; padding: var(--space-3) var(--space-5); }
+
+.pe-progress { margin-top: var(--space-3); }
+.pe-progress__row { display: flex; align-items: center; gap: var(--space-3); }
+.pe-progress .meter { flex: 1 1 auto; }
+.pe-progress__pct {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  min-width: 4ch;            /* stops the row jittering as digits change */
+  text-align: right;
+}
+.pe-progress__text { margin-top: var(--space-2); font-size: 0.8125rem; color: var(--color-text-muted); }
+.pe-progress #progress-fill { transition: width .12s linear; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pe-progress #progress-fill { transition: none; }
+}
+
+/* The log is long and mostly uneventful, so the rows that need attention are
+   tinted rather than left for the eye to find. */
+.pe-log { font-size: 0.8125rem; }
+.pe-log tr.is-warn td { background: color-mix(in srgb, var(--color-warning) 10%, transparent); }
+.pe-log tr.is-bad td { background: color-mix(in srgb, var(--color-danger) 12%, transparent); }
+.pe-log td:nth-child(3) { font-family: var(--font-mono); text-align: right; }
+
+@media (max-width: 560px) {
+  #run-btn { width: 100%; }
+  .pe-run { flex-direction: column; align-items: stretch; }
+  .pe-progress__row { flex-wrap: wrap; }
+  .pe-progress .meter { flex: 1 1 100%; order: -1; }
+  .pe-file { flex-wrap: wrap; }
+}

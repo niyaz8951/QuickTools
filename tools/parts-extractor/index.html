@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/global.css">
+  <link rel="stylesheet" href="styles.css">
+  <title>Parts List Extractor — Thinkneering</title>
+  <meta name="description" content="Turn a pile of spare parts list workbooks into one long table. Finds the header row wherever it sits, expands merged cells and unpivots the model columns.">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header data-site-header></header>
+
+  <main id="main" class="wrap">
+    <div class="page-head">
+      <p class="eyebrow">Tools</p>
+      <h1>Parts List Extractor</h1>
+      <p class="page-head__lede">Many parts-list workbooks in, one long table out</p>
+      <p>Drop in a set of spare parts list workbooks. Every sheet is scanned, the header
+         row is found wherever it sits, the varying spellings are mapped to one schema,
+         merged cells are expanded, and the per-model quantity columns are unpivoted into
+         Attribute and Value. Everything runs in your browser — nothing is uploaded.</p>
+    </div>
+
+    <!-- 1 — Workbooks -->
+    <section class="panel" aria-labelledby="step-files">
+      <div class="panel__head"><h2 id="step-files">Workbooks</h2></div>
+
+      <div id="dropzone" class="pe-drop" tabindex="0" role="button"
+           aria-label="Choose workbooks or drop them here">
+        <p class="pe-drop__title">Choose workbooks or drop them here</p>
+        <p class="pe-drop__hint">.xlsx, .xlsm and legacy .xls · add as many as you like</p>
+      </div>
+      <input type="file" id="file-input" accept=".xls,.xlsx,.xlsm" multiple class="sr-only">
+
+      <ul class="pe-files" id="file-list"></ul>
+      <p class="hint" id="file-note">No workbooks chosen yet.</p>
+    </section>
+
+    <!-- 2 — Options -->
+    <section class="panel" aria-labelledby="step-options">
+      <div class="panel__head"><h2 id="step-options">Options</h2></div>
+      <label class="check pe-check">
+        <input type="checkbox" id="keep-dash" checked>
+        <span>Keep “-” and “0” cells<em>Off means fitted parts only — cells reading “-” or “0” are dropped</em></span>
+      </label>
+
+      <div class="toolbar pe-run" role="group" aria-label="Extraction">
+        <button type="button" class="btn btn--primary" id="run-btn" disabled>Extract</button>
+        <span class="pe-run__note" id="run-note" role="status" aria-live="polite">Add at least one workbook.</span>
+      </div>
+
+      <div class="pe-progress" id="progress" hidden>
+        <div class="pe-progress__row">
+          <div class="meter" role="progressbar" id="progress-bar"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+               aria-labelledby="progress-text"><span id="progress-fill"></span></div>
+          <span class="pe-progress__pct" id="progress-pct">0%</span>
+          <button type="button" class="btn btn--ghost btn--sm" id="cancel-btn">Cancel</button>
+        </div>
+        <p class="pe-progress__text" id="progress-text" role="status" aria-live="polite">Starting…</p>
+      </div>
+    </section>
+
+    <!-- 3 — Result -->
+    <section class="panel" id="result-panel" aria-labelledby="step-result" hidden>
+      <div class="panel__head">
+        <h2 id="step-result">Result</h2>
+        <div class="toolbar">
+          <button type="button" class="btn btn--primary" id="download-btn">Download Excel</button>
+          <button type="button" class="btn btn--ghost" id="clear-btn">Clear</button>
+        </div>
+      </div>
+      <div class="stat-grid" id="result-stats"></div>
+      <div class="table-wrap">
+        <table class="data pe-log">
+          <thead><tr><th>Source file</th><th>Sheet</th><th>Rows</th><th>Status</th></tr></thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
+      <p class="hint">Every sheet is listed, including the ones that produced nothing.
+        A sheet you expected showing “no parts table found” means its header row uses a
+        spelling the dictionary does not know yet.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="tips">
+      <div class="panel__head"><h2 id="tips">What comes out</h2></div>
+      <p class="muted"><strong>Parts_Long</strong> is the table itself — source file, sheet,
+        section banner, the nine descriptor columns, then Attribute (the model code) and
+        Value (the quantity). <strong>Extraction_Log</strong> lists every sheet and what
+        happened to it. <strong>QA_Check_Headers</strong> flags columns treated as models
+        that look like descriptors — the early warning that a new spelling has appeared.
+        <strong>QA_Model_Renames</strong> shows where a model code was spelled two ways and
+        which spelling won. <strong>Model_Summary</strong> counts rows per file, sheet and
+        model.</p>
+    </section>
+  </main>
+
+  <footer data-site-footer></footer>
+  <script src="../../assets/js/global.js"></script>
+  <script src="parts-extractor.js"></script>
+</body>
+</html>

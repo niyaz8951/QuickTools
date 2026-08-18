@@ -723,7 +723,7 @@ function numberPieces(p) {
 function meterRow(label, ratio, value, tone) {
   const row = el('div', 'cc-meter');
   row.appendChild(el('span', null, label));
-  const bar = el('div', 'cc-bar');
+  const bar = el('div', 'meter');
   const fill = el('span');
   if (tone) fill.className = `is-${tone}`;
   fill.style.width = `${Math.min(100, ratio * 100).toFixed(1)}%`;

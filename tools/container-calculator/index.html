@@ -66,15 +66,15 @@
 
       <fieldset class="cc-rules">
         <legend>Loading rules</legend>
-        <label class="cc-check">
+        <label class="check">
           <input type="checkbox" id="opt-stack" checked>
           <span>Allow stacking<em>Items may sit on top of others</em></span>
         </label>
-        <label class="cc-check">
+        <label class="check">
           <input type="checkbox" id="opt-tilt">
           <span>Allow turning on side<em>Lets the packer rotate items in all axes</em></span>
         </label>
-        <label class="cc-check">
+        <label class="check">
           <input type="checkbox" id="opt-pallet">
           <span>Cargo is palletised<em>Puts every item on a pallet before packing</em></span>
         </label>
@@ -156,7 +156,7 @@
            worker, so this bar keeps painting and Cancel stays clickable. -->
       <div class="cc-progress" id="progress" hidden>
         <div class="cc-progress__row">
-          <div class="cc-bar" role="progressbar" id="progress-bar"
+          <div class="meter" role="progressbar" id="progress-bar"
                aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
                aria-labelledby="progress-text"><span id="progress-fill"></span></div>
           <span class="cc-progress__pct" id="progress-pct">0%</span>

@@ -36,7 +36,8 @@
     square: '<rect x="4" y="4" width="16" height="16" rx="2"/>',
     check: '<path d="M20 6L9 17l-5-5"/>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
-    'arrow-right': '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>'
+    'arrow-right': '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>',
+    table: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>'
   };
 
   function icon(name, size) {
@@ -77,7 +78,8 @@
      home page. */
   var NAV = [
     { href: 'tools/compliance-maker/', title: 'Compliance Maker' },
-    { href: 'tools/container-calculator/', title: 'Container Calculator' }
+    { href: 'tools/container-calculator/', title: 'Container Calculator' },
+    { href: 'tools/parts-extractor/', title: 'Parts List Extractor' }
   ];
 
   function headerHTML() {

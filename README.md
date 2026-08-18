@@ -6,6 +6,9 @@ Two browser tools for engineering office work:
   compliance matrix and exports it as a formatted `.xlsx`.
 - **Container Calculator** — works out how many containers or trailers a shipment
   needs, with a load plan, stowage drawings and a PDF report.
+- **Parts List Extractor** — reads a set of spare parts list workbooks, finds the
+  header row on every sheet, maps the varying spellings to one schema, expands
+  merged cells and unpivots the per-model quantity columns into one long table.
 
 Everything runs in the visitor's browser. There is no server, no database, no
 accounts and no analytics. Files that are opened are read locally and never
@@ -63,14 +66,27 @@ tools/container-calculator/
   index.html
   styles.css
   js/app.js, packer.js, draw.js, xlsx-io.js, pdf.js
+tools/parts-extractor/
+  index.html
+  styles.css
+  parts-extractor.js                    file picking, progress, download
+  extractor-worker.js                   the extraction itself
 ```
 
 ## External dependencies
 
-One, and only on the Compliance Maker page: **pdf.js 3.11.174**, loaded from
-cdnjs, used to pull text out of an uploaded PDF. Pasting text instead does not
-touch it. Everything else — the Excel writer, the PDF report writer, the packing
-solver, the drawings — is hand-rolled and included here.
+Two, each on one page only.
+
+**pdf.js 3.11.174** on the Compliance Maker page, used to pull text out of an
+uploaded PDF. Pasting text instead does not touch it.
+
+**SheetJS 0.18.5** in the Parts List Extractor's worker, used to read `.xlsx`
+and legacy `.xls` workbooks — including their merged-cell ranges, which is what
+makes the extraction correct — and to write the output workbook. It is about
+900 KB and loads only when that tool runs.
+
+Everything else — the compliance matrix Excel writer, the PDF report writer,
+the packing solver, the drawings — is hand-rolled and included here.
 
 If you would rather not depend on a CDN, download `pdf.min.js` and
 `pdf.worker.min.js` from that version, put them in `assets/vendor/pdfjs/`, and
@@ -86,6 +102,9 @@ load, the CSS falls back to the system sans-serif and the layout still holds.
   `assets/css/global.css`. Change them there; nothing hardcodes a raw value.
 - To add a tool: create `tools/<kebab-case-name>/index.html`, add one entry to
   `NAV` in `assets/js/global.js`, and one entry to `TOOLS` in `index.html`.
+- The Parts List Extractor's header dictionary is `HEADER_ALIASES` at the top of
+  `extractor-worker.js`. A workbook whose sheet reports "no parts table found"
+  usually needs one new alias adding there and nothing else.
 - The Compliance Maker's highlight words live in `data/highlight-rules.json`,
   as three lists: `red`, `redbold` and `underline`. All entries are lowercase;
   matching is case-insensitive and whole-word.

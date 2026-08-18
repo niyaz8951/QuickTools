@@ -42,28 +42,8 @@
   font-weight: 500;
 }
 
-.cc-check {
-  display: flex;
-  gap: var(--space-2);
-  align-items: flex-start;
-  cursor: pointer;
-  font-size: 0.875rem;
-}
 
-.cc-check input {
-  width: 18px;
-  height: 18px;
-  margin-top: 2px;
-  flex: none;
-  accent-color: var(--color-primary);
-}
 
-.cc-check em {
-  display: block;
-  font-style: normal;
-  font-size: 0.8125rem;
-  color: var(--color-text-muted);
-}
 
 /* ---------------------------------------------------------- cargo */
 
@@ -219,22 +199,8 @@
   color: var(--color-text-muted);
 }
 
-.cc-bar {
-  height: 8px;
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-sunken);
-  overflow: hidden;
-}
 
-.cc-bar > span {
-  display: block;
-  height: 100%;
-  background: var(--color-primary);
-}
 
-.cc-bar > span.is-good { background: var(--color-success); }
-.cc-bar > span.is-warn { background: var(--color-warning); }
-.cc-bar > span.is-bad { background: var(--color-danger); }
 
 .cc-meter .cc-val {
   font-family: var(--font-mono);
@@ -377,7 +343,7 @@
   gap: var(--space-3);
 }
 
-.cc-progress .cc-bar { flex: 1 1 auto; }
+.cc-progress .meter { flex: 1 1 auto; }
 
 .cc-progress__pct {
   font-family: var(--font-mono);
@@ -402,7 +368,7 @@
 
 @media (max-width: 560px) {
   .cc-progress__row { flex-wrap: wrap; }
-  .cc-progress .cc-bar { flex: 1 1 100%; order: -1; }
+  .cc-progress .meter { flex: 1 1 100%; order: -1; }
 }
 
 /* Pallet mix-and-match list. A scrollable checkbox group rather than a
