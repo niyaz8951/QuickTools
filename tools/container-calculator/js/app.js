@@ -18,9 +18,12 @@ const state = {
   costTouched: false,   // true once the user edits the cost, so the sample never overwrites them
   unit: 'm',
   options: { allowStacking: true, allowTilt: false, gap: 0.1 },
-  pallet: { on: false, type: 'eur1', clearance: DEFAULT_PALLET_CLEARANCE,
+  pallet: { on: false,
+            types: ['eur1'],      // every pallet the user can source
+            useCustom: false,
+            clearance: DEFAULT_PALLET_CLEARANCE,
             maxLoadHeight: 1.8,   // goods height above the deck
-            maxLoad: 1500,        // safe working load of the pallet
+            maxLoad: 0,           // 0 = use each pallet's own safe working load
             custom: { length: 1.2, width: 0.8, deck: 0.144, weight: 25, swl: 1500 } },
   items: [],   // dimensions always stored in metres
 };
@@ -103,6 +106,22 @@ function restore() {
       pallet: { ...state.pallet, ...(saved.pallet || {}),
                 custom: { ...state.pallet.custom, ...((saved.pallet || {}).custom || {}) } },
     });
+
+    /* Saved state from before mix-and-match holds a single `type` string.
+       Carry it into the new list rather than silently resetting the user's
+       pallet choice to the default. */
+    const savedPallet = saved.pallet || {};
+    if (!Array.isArray(state.pallet.types)) state.pallet.types = [];
+    if (savedPallet.type && !savedPallet.types) {
+      if (savedPallet.type === 'custom') {
+        state.pallet.useCustom = true;
+        state.pallet.types = [];
+      } else {
+        state.pallet.types = [savedPallet.type];
+      }
+    }
+    if (!state.pallet.types.length && !state.pallet.useCustom) state.pallet.types = ['eur1'];
+    delete state.pallet.type;
   } catch { /* ignore corrupt state */ }
 }
 
@@ -140,30 +159,67 @@ function setValue(selector, value) {
 }
 
 function buildPalletSelect() {
-  const select = $('#pallet-type');
-  select.innerHTML = '';
+  const list = $('#pallet-list');
+  list.innerHTML = '';
+
   const groups = {};
   for (const p of PALLET_PRESETS) (groups[p.region] ||= []).push(p);
-  for (const [label, list] of Object.entries(groups)) {
-    const og = el('optgroup');
-    og.label = label;
-    for (const p of list) {
-      const opt = el('option', null, p.name);
-      opt.value = p.id;
-      og.appendChild(opt);
+
+  const addCheck = (id, label, sub) => {
+    const wrap = el('label', 'cc-pallet-opt');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.value = id;
+    box.dataset.pallet = id;
+    const text = el('span');
+    text.appendChild(document.createTextNode(label));
+    if (sub) {
+      const em = el('em');
+      em.textContent = sub;
+      text.appendChild(em);
     }
-    select.appendChild(og);
+    wrap.append(box, text);
+    return wrap;
+  };
+
+  const mm = (m) => Math.round(m * 1000);
+  for (const [region, items] of Object.entries(groups)) {
+    const head = el('p', 'cc-pallet-group');
+    head.textContent = region;
+    list.appendChild(head);
+    for (const p of items) {
+      list.appendChild(addCheck(p.id, p.name, `${p.weight} kg · SWL ${p.swl} kg`));
+    }
   }
-  const custom = el('option', null, 'Custom pallet…');
-  custom.value = 'custom';
-  select.appendChild(custom);
+  const head = el('p', 'cc-pallet-group');
+  head.textContent = 'Your own';
+  list.appendChild(head);
+  list.appendChild(addCheck('custom', 'Custom pallet', 'dimensions below'));
+
+  list.addEventListener('change', (e) => {
+    const id = e.target.dataset && e.target.dataset.pallet;
+    if (!id) return;
+    if (id === 'custom') {
+      state.pallet.useCustom = e.target.checked;
+    } else {
+      const set = new Set(state.pallet.types);
+      if (e.target.checked) set.add(id); else set.delete(id);
+      state.pallet.types = [...set];
+    }
+    syncSetupPanel();
+    markStale();
+  });
 }
 
 function syncPalletPanel() {
   $('#pallet-fields').hidden = !state.pallet.on;
-  setValue('#pallet-type', state.pallet.type);
+  for (const box of $('#pallet-list').querySelectorAll('input[data-pallet]')) {
+    box.checked = box.dataset.pallet === 'custom'
+      ? state.pallet.useCustom
+      : state.pallet.types.includes(box.dataset.pallet);
+  }
   setValue('#pallet-clearance', Math.round(state.pallet.clearance * 1000));
-  $('#pallet-custom').hidden = state.pallet.type !== 'custom';
+  $('#pallet-custom').hidden = !state.pallet.useCustom;
   setValue('#pallet-l', Math.round(state.pallet.custom.length * 1000));
   setValue('#pallet-w', Math.round(state.pallet.custom.width * 1000));
   setValue('#pallet-h', Math.round(state.pallet.custom.deck * 1000));
@@ -174,10 +230,11 @@ function syncPalletPanel() {
   setValue('#pallet-swl', state.pallet.custom.swl);
 
   if (!state.pallet.on) return;
-  const pal = activePallet();
   const mm = (m) => Math.round(m * 1000);
-  $('#pallet-hint').textContent =
-    `Deck ${mm(pal.length)} × ${mm(pal.width)} mm · ${mm(pal.deck)} mm high · ${pal.weight} kg each.`;
+  const chosen = candidatePallets();
+  $('#pallet-hint').textContent = chosen.length === 1
+    ? `Using ${chosen[0].name} — deck ${mm(chosen[0].length)} × ${mm(chosen[0].width)} mm, ${mm(chosen[0].deck)} mm high.`
+    : `${chosen.length} pallets available, tried smallest first: ${chosen.map((p) => `${mm(p.length)}×${mm(p.width)}`).join(', ')}.`;
   syncPalletNote();
 }
 
@@ -203,7 +260,7 @@ function syncPalletNote() {
   }
 
   const lines = packed.slice(0, 4).map((r) =>
-    `${r.tag}: ${r.perLayer} per layer × ${r.layers} layer${r.layers === 1 ? '' : 's'} = ${r.perPallet} per pallet → ${r.pallets} pallet${r.pallets === 1 ? '' : 's'} (limited by ${r.limitedBy})`);
+    `${r.tag} → ${r.pallet}: ${r.perLayer} per layer × ${r.layers} layer${r.layers === 1 ? '' : 's'} = ${r.perPallet} per pallet → ${r.pallets} pallet${r.pallets === 1 ? '' : 's'} (limited by ${r.limitedBy})`);
   if (packed.length > 4) lines.push(`…and ${packed.length - 4} more row(s).`);
 
   let text = `${totalPallets} pallet${totalPallets === 1 ? '' : 's'} in total. ` + lines.join(' · ');
@@ -393,16 +450,29 @@ function usableItems() {
 }
 
 /* The pallet spec currently in force, in metres and kg. */
-function activePallet() {
-  if (state.pallet.type === 'custom') return { id: 'custom', name: 'Custom pallet', ...state.pallet.custom };
-  return PALLET_PRESETS.find((p) => p.id === state.pallet.type) || PALLET_PRESETS[0];
+function customPallet() {
+  return { id: 'custom', name: 'Custom pallet', ...state.pallet.custom };
 }
 
-/* Picking a pallet type adopts its safe working load, unless the user has
-   already overridden it for this pallet. */
-function adoptPalletLimits() {
-  const pal = activePallet();
-  if (pal.swl) state.pallet.maxLoad = pal.swl;
+/* Every pallet the user has ticked, smallest deck first.
+ *
+ * The ordering is the whole point of the mix-and-match: a small deck tiles a
+ * container floor far better than a large one — two EUR pallets fit across a
+ * 40 ft container where a 2000 mm skid fits one and wastes the rest of the
+ * width — so the smallest deck that can carry an item is the one that should.
+ * Larger pallets earn their place only by carrying what the smaller ones
+ * physically cannot. */
+function candidatePallets() {
+  const chosen = PALLET_PRESETS.filter((p) => state.pallet.types.includes(p.id));
+  if (state.pallet.useCustom) chosen.push(customPallet());
+  if (!chosen.length) chosen.push(PALLET_PRESETS[0]);   // never leave the set empty
+  return chosen.sort((a, b) => (a.length * a.width) - (b.length * b.width));
+}
+
+/* The load ceiling for one pallet: the override if set, otherwise that
+   pallet's own rating. */
+function loadLimitFor(pal) {
+  return state.pallet.maxLoad > 0 ? state.pallet.maxLoad : (pal.swl || 1500);
 }
 
 /* Build loaded pallets, then hand those to the container packer.
@@ -437,10 +507,9 @@ function tilePerLayer(item, pal) {
 }
 
 function palletise(items) {
-  const pal = activePallet();
+  const pallets = candidatePallets();
   const clear = Math.max(0, state.pallet.clearance || 0);
   const maxLoadH = Math.max(0.01, state.pallet.maxLoadHeight || 1.8);
-  const maxLoadKg = Math.max(1, state.pallet.maxLoad || pal.swl || 1500);
 
   const units = [];
   const loose = [];
@@ -449,28 +518,29 @@ function palletise(items) {
   for (const item of items) {
     const qty = Math.max(1, Math.round(Number(item.qty) || 1));
     const each = Number(item.weight) || 0;
-    const perLayer = tilePerLayer(item, pal);
 
-    if (perLayer < 1) {
-      // Bigger than the deck in both orientations — ship it loose.
+    /* Smallest deck that physically takes the item wins. The list is already
+       sorted small-to-large, so the first hit is the answer. */
+    const pal = pallets.find((p) => tilePerLayer(item, p) >= 1);
+    if (!pal) {
       loose.push(item);
       report.push({ tag: item.tag || 'untitled', loose: true });
       continue;
     }
 
-    const layersByHeight = item.stackable
-      ? Math.max(1, Math.floor(maxLoadH / item.height))
-      : 1;
+    const perLayer = tilePerLayer(item, pal);
+    const layersByHeight = item.stackable ? Math.max(1, Math.floor(maxLoadH / item.height)) : 1;
     const byHeight = perLayer * layersByHeight;
-    const byWeight = each > 0 ? Math.max(1, Math.floor(maxLoadKg / each)) : Infinity;
+    const limitKg = loadLimitFor(pal);
+    const byWeight = each > 0 ? Math.max(1, Math.floor(limitKg / each)) : Infinity;
     const perPallet = Math.max(1, Math.min(byHeight, byWeight, qty));
 
     const full = Math.floor(qty / perPallet);
     const remainder = qty % perPallet;
 
-    const makeUnit = (count, palletQty) => ({
+    const makeUnit = (count, palletQty, partial) => ({
       ...item,
-      tag: `${item.tag || 'Item'} on ${pal.name}${count < perPallet ? ' (part)' : ''}`,
+      tag: `${item.tag || 'Item'} on ${pal.name}${partial ? ' (part)' : ''}`,
       length: pal.length + clear,
       width: pal.width + clear,
       height: pal.deck + Math.ceil(count / perLayer) * item.height,
@@ -478,11 +548,12 @@ function palletise(items) {
       qty: palletQty,
     });
 
-    if (full > 0) units.push(makeUnit(perPallet, full));
-    if (remainder > 0) units.push(makeUnit(remainder, 1));
+    if (full > 0) units.push(makeUnit(perPallet, full, false));
+    if (remainder > 0) units.push(makeUnit(remainder, 1, true));
 
     report.push({
       tag: item.tag || 'untitled',
+      pallet: pal.name,
       perLayer,
       layers: Math.ceil(perPallet / perLayer),
       perPallet,
@@ -491,7 +562,7 @@ function palletise(items) {
     });
   }
 
-  return { items: units.concat(loose), report, loose, pallet: pal, clearance: clear };
+  return { items: units.concat(loose), report, loose, pallets, clearance: clear };
 }
 
 /* What actually goes to the packer. */
@@ -1152,13 +1223,6 @@ function init() {
     markStale();
   });
 
-  $('#pallet-type').addEventListener('change', (e) => {
-    state.pallet.type = e.target.value;
-    adoptPalletLimits();
-    syncSetupPanel();
-    markStale();
-  });
-
   $('#pallet-load-h').addEventListener('input', (e) => {
     state.pallet.maxLoadHeight = Math.max(0.01, (Number(e.target.value) || 0) / 1000);
     syncSetupPanel();
@@ -1166,7 +1230,7 @@ function init() {
   });
 
   $('#pallet-load-kg').addEventListener('input', (e) => {
-    state.pallet.maxLoad = Math.max(1, Number(e.target.value) || 1);
+    state.pallet.maxLoad = Math.max(0, Number(e.target.value) || 0);
     syncSetupPanel();
     markStale();
   });

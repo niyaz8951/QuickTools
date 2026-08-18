@@ -87,9 +87,12 @@
       <!-- Shown only when "Cargo is palletised" is ticked. -->
       <fieldset class="cc-rules" id="pallet-fields" hidden>
         <legend>Pallet</legend>
-        <div class="field">
-          <label for="pallet-type">Pallet type</label>
-          <select id="pallet-type"></select>
+        <div class="field cc-pallet-pick">
+          <span class="cc-pallet-pick__label" id="pallet-pick-label">Pallet types available</span>
+          <div class="cc-pallet-list" id="pallet-list" role="group" aria-labelledby="pallet-pick-label"></div>
+          <p class="hint">Tick every pallet you can actually source. Each item goes on the
+            <strong>smallest</strong> ticked pallet it fits on; bigger ones are used only for
+            items that will not fit a smaller deck.</p>
           <p class="hint" id="pallet-hint"></p>
         </div>
         <div class="field">
@@ -103,9 +106,9 @@
           <p class="hint">Goods height above the deck. Caps how many layers are stacked.</p>
         </div>
         <div class="field">
-          <label for="pallet-load-kg">Max load per pallet (kg)</label>
-          <input id="pallet-load-kg" type="number" min="1" step="10" inputmode="numeric" value="1500">
-          <p class="hint">Safe working load. Adopted from the pallet type; override for your own.</p>
+          <label for="pallet-load-kg">Load limit override (kg)</label>
+          <input id="pallet-load-kg" type="number" min="0" step="10" inputmode="numeric" value="0">
+          <p class="hint">Leave at 0 to use each pallet's own safe working load.</p>
         </div>
         <div class="field cc-pallet-custom" id="pallet-custom" hidden>
           <label for="pallet-l">Deck length (mm)</label>

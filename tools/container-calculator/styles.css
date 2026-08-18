@@ -404,3 +404,53 @@
   .cc-progress__row { flex-wrap: wrap; }
   .cc-progress .cc-bar { flex: 1 1 100%; order: -1; }
 }
+
+/* Pallet mix-and-match list. A scrollable checkbox group rather than a
+   multi-select: multi-selects are near-unusable on a phone and hide the
+   per-pallet detail that decides which ones you tick. */
+.cc-pallet-pick__label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: var(--space-2);
+}
+
+.cc-pallet-list {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--color-surface);
+}
+
+.cc-pallet-group {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin: var(--space-2) 0 var(--space-1);
+}
+.cc-pallet-group:first-child { margin-top: 0; }
+
+.cc-pallet-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-weight: 400;
+  margin-bottom: 0;
+}
+.cc-pallet-opt:hover { background: var(--color-surface-sunken); }
+.cc-pallet-opt input { margin-top: 3px; flex: none; }
+.cc-pallet-opt em {
+  display: block;
+  font-style: normal;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+/* Keyboard users must be able to see which row they are on. */
+.cc-pallet-opt:focus-within { outline: 2px solid var(--color-primary); outline-offset: -2px; }
