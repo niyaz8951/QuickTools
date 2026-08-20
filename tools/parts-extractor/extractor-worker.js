@@ -27,9 +27,10 @@ const HEADER_ALIASES = {
   'Drawing': ['drawing', 'drawing no', 'drawing ref'],
   'Description': ['description', 'part description'],
   'Part Number DENV': ['denv part number', 'part number denv', 'denv p/no',
-    'denv part no', 'denv partnumber'],
+    'denv part no', 'denv partnumber', 'denv partno'],
   'Part Number DAE': ['part number', 'part number dae', 'dae part number',
-    'mcq part number', 'dae p/no', 'mcq p/no', 'part number mcq', 'supplier ref'],
+    'mcq part number', 'dae p/no', 'mcq p/no', 'part number mcq', 'supplier ref',
+    'part no', 'dae partno', 'mcq partno'],
   'Details': ['details', 'detail', 'remarks'],
   'Circuit': ['circuit', 'circuit no'],
   'Wiring Diagram Reference': ['wiring diagram reference', 'wiring diagram',
@@ -61,7 +62,10 @@ const SHEET_BLACKLIST = ['front page', 'back page', 'index', 'drawings', 'revisi
 
 const TITLE_PAT = /^(page\s*\d+|issue\s*\d+|.*\bissue\s*\d+)/i;
 const NOISE_PAT = /quantity for each/i;
-const SUSPECT_HEADER = /\b(part|number|stock|wiring|circuit|detail|item|drawing|description|critical|ref)\b/i;
+/* No trailing \b: "Denv Partn°" contains "part" followed by a word character,
+   so a closing boundary made the test miss precisely the case it exists to
+   catch. Over-flagging here is harmless — this sheet is meant to be read. */
+const SUSPECT_HEADER = /\b(part|number|stock|wiring|circuit|detail|item|drawing|description|critical|ref)/i;
 
 /* ------------------------------------------------------------------ *
  * 2. Reading — one uniform grid of strings, merges expanded.
@@ -125,8 +129,36 @@ function norm(s) {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase()
+    /* "n°" is the French abbreviation for "number" and turns up in headers
+       written by the Belgian/French sites: "Denv Partn°", "Part n°". Folding
+       it to "no" here lets the existing "denv part no" alias match, instead
+       of needing one alias per punctuation variant. Both the degree sign
+       (U+00B0) and the masculine ordinal (U+00BA) appear in the wild. */
+    .replace(/n\s*[\u00b0\u00ba]/g, 'no')
     .replace(/[:.]+$/, '')
     .trim();
+}
+
+/* Repeated page headers often omit labels the first header carried — the
+   printer only needed them at the top of the sheet. Replacing the mapping
+   wholesale on every repeat therefore DROPS those columns for the rest of the
+   sheet, silently: the column is in neither the descriptor mapping nor the
+   model list, so its values are never read. This merges a repeat into what is
+   already known, retaining a previous mapping only where the repeat leaves
+   that column genuinely blank. A repeat that renames a column still wins. */
+function mergeHeader(prev, next, rawRow) {
+  if (!prev) return next;
+  const taken = new Set(Object.values(next.mapping).concat(next.models.map((m) => m[0])));
+  for (const [canon, idx] of Object.entries(prev.mapping)) {
+    if (canon in next.mapping) continue;   // the repeat names it, possibly elsewhere
+    if (taken.has(idx)) continue;          // that column is something else now
+    const cell = rawRow[idx];
+    if (cell === undefined || cell === null || String(cell).trim() === '') {
+      next.mapping[canon] = idx;
+      taken.add(idx);
+    }
+  }
+  return next;
 }
 
 function classifyHeader(row) {
@@ -196,8 +228,9 @@ function extractSheet(ws, fileName, sheetName, keepDash) {
       const before = models ? models.map((x) => x[1]).join('\u0001') : null;
       const after = hit.models.map((x) => x[1]).join('\u0001');
       if (mapping === null || before !== after) headerVariants++;
-      mapping = hit.mapping;
-      models = hit.models;
+      const merged = mergeHeader(mapping !== null ? { mapping, models } : null, hit, rawRow);
+      mapping = merged.mapping;
+      models = merged.models;
       last = {};
       for (const k of FILL_DOWN) last[k] = '';
       continue;
