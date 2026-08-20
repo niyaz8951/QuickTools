@@ -44,6 +44,7 @@
   var panePdf    = document.getElementById('pane-pdf');
   var paneText   = document.getElementById('pane-text');
   var pasteInput = document.getElementById('paste-input');
+  var keepBreaks = document.getElementById('keep-breaks');
   var btnConvert = document.getElementById('btn-convert');
   var convertHint= document.getElementById('convert-hint');
   var pageLimitNote = document.getElementById('page-limit-note');
@@ -122,7 +123,12 @@
   // treatment a PART header gets.
   var END_OF_SECTION_RE = /\bend\s+of\s+section\b[.:\s]*$/i;
 
-  function parseLines(rawLines) {
+  // opts.keepBreaks — treat every line as its own row instead of folding
+  // unlabeled lines into the clause above. Only the paste path passes this;
+  // a PDF's line breaks come from the page layout, not the author, so folding
+  // them back together is the only way to recover the real clause there.
+  function parseLines(rawLines, opts) {
+    var keepBreaks = !!(opts && opts.keepBreaks);
     var rows = [];
     for (var i = 0; i < rawLines.length; i++) {
       var line = rawLines[i].replace(/\s+/g, ' ').trim();
@@ -144,7 +150,7 @@
 
       if (startsNewItem(line)) {
         rows.push(classify(line));
-      } else if (rows.length &&
+      } else if (!keepBreaks && rows.length &&
                  rows[rows.length - 1].type !== 'part' &&
                  rows[rows.length - 1].type !== 'section') {
         // Wrapped continuation of the previous clause — append.
@@ -496,7 +502,8 @@
       }
       currentName = 'compliance-matrix';
       setConverting(true);
-      var rows = parseLines(raw.split(/\r\n|\r|\n/));
+      var rows = parseLines(raw.split(/\r\n|\r|\n/),
+                            { keepBreaks: keepBreaks && keepBreaks.checked });
       finishBuild(rows, 'Done — ' + rows.length + ' rows' + trimmed);
       setConverting(false);
     }

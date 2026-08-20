@@ -1,6 +1,6 @@
 # Thinkneering — Tools
 
-Two browser tools for engineering office work:
+Four browser tools for engineering office work:
 
 - **Compliance Maker** — turns a specification PDF (or pasted text) into a numbered
   compliance matrix and exports it as a formatted `.xlsx`.
@@ -9,6 +9,10 @@ Two browser tools for engineering office work:
 - **Parts List Extractor** — reads a set of spare parts list workbooks, finds the
   header row on every sheet, maps the varying spellings to one schema, expands
   merged cells and unpivots the per-model quantity columns into one long table.
+- **Text Cleaner** — tidies manuscript text for a reader: straightens curly quotes,
+  puts each line of speech on its own line, rewraps long paragraphs at a sentence
+  boundary and spaces out scene breaks. Paste anywhere on the page and the cleaned
+  text goes straight back to the clipboard.
 
 Everything runs in the visitor's browser. There is no server, no database, no
 accounts and no analytics. Files that are opened are read locally and never
@@ -54,7 +58,7 @@ Then open <http://localhost:8000>.
 ## Structure
 
 ```
-index.html                              home page, two tiles
+index.html                              home page, one tile per tool
 assets/css/global.css                   design tokens + shared components
 assets/js/global.js                     header, footer, theme toggle, helpers
 data/highlight-rules.json               words the Compliance Maker highlights
@@ -71,6 +75,10 @@ tools/parts-extractor/
   styles.css
   parts-extractor.js                    file picking, progress, download
   extractor-worker.js                   the extraction itself
+tools/text-cleaner/
+  index.html
+  styles.css
+  textcleaner.js                        the cleaning steps and the paste fast path
 ```
 
 ## External dependencies
@@ -108,6 +116,18 @@ load, the CSS falls back to the system sans-serif and the layout still holds.
 - The Compliance Maker's highlight words live in `data/highlight-rules.json`,
   as three lists: `red`, `redbold` and `underline`. All entries are lowercase;
   matching is case-insensitive and whole-word.
+- The Compliance Maker's parser folds an unlabelled line into the clause above
+  it, because in a PDF a line break is where the page ran out of width, not
+  where the author ended a thought. Pasted text is different — there the breaks
+  are deliberate — so the paste pane carries a **Keep line breaks** option that
+  passes `keepBreaks` to `parseLines()` and turns every line into its own row.
+  It is off by default, since text copied out of a PDF viewer arrives wrapped.
+  The PDF path never passes the flag.
+- The Text Cleaner's transforms are the `STEPS` array near the top of
+  `textcleaner.js`. Order is significant — later steps assume the earlier ones
+  have run — so add a step at the point in the array where it belongs rather
+  than at the end. Its settings are kept in `localStorage` under
+  `tn.text-cleaner.settings`; clearing site data resets them.
 
 ## Licence
 

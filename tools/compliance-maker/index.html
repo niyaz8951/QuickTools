@@ -147,6 +147,21 @@
           <textarea id="paste-input" spellcheck="false" placeholder="PART 1  GENERAL&#10;1.01  DESCRIPTION OF WORK&#10;A.  Extent of work shall be as indicated on drawings.&#10;1.  Chilled water pipe work and its accessories."></textarea>
           <p class="hint">Labels (1.01, A., 1., PART 1) are detected the same way as in a PDF.</p>
         </div>
+
+        <!-- Paste-only option. It lives in this pane, not in Formatting, because
+             it changes how the text is *read* and it is meaningless for a PDF —
+             there, line breaks are wrap artifacts, not the author's intent. -->
+        <div class="toggle-row" style="margin-top:var(--space-3)">
+          <input type="checkbox" id="keep-breaks">
+          <label for="keep-breaks">
+            Keep line breaks — start a new row at every line, even when the line
+            has no label
+            <span class="hint" style="display:block">
+              Leave this off if you pasted from a PDF, where a clause is split
+              across several wrapped lines.
+            </span>
+          </label>
+        </div>
       </div>
 
       <div class="row" style="margin-top:var(--space-3)">
