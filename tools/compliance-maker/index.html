@@ -157,8 +157,22 @@
             Keep line breaks — start a new row at every line, even when the line
             has no label
             <span class="hint" style="display:block">
-              Leave this off if you pasted from a PDF, where a clause is split
-              across several wrapped lines.
+              Leave this off for normal specification text: labels are detected
+              even without a full stop (1, 2, 3 as well as 1., 2., 3.) and wrapped
+              lines are rejoined into one clause. Turn it on only for text where
+              every line really is its own entry.
+            </span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <input type="checkbox" id="tidy-first" checked>
+          <label for="tidy-first">
+            Tidy the text first — close up words split across a line, drop
+            repeated page headers and page numbers, straighten quotes and dashes
+            <span class="hint" style="display:block">
+              Safe for specifications: it never joins clauses or rewords anything.
+              Whatever it removes is reported beside the Convert button.
             </span>
           </label>
         </div>
@@ -257,6 +271,7 @@ starters</textarea>
        an exact version rather than a floating tag. -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="../../assets/js/global.js"></script>
+  <script src="../../assets/js/reflow.js"></script>
   <script src="xlsx-writer.js"></script>
   <script src="compliance-maker.js"></script>
 </body>

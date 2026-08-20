@@ -48,17 +48,23 @@
   var RE_SEMI = /;\s/g;
   var RE_DOT = /\./g;
 
-  function removeLineBreaks(text) {
-    return text.replace(RE_NL, ' ').replace(RE_CR, ' ');
-  }
+  /* These three are not prose-specific — the Compliance Maker needs the same
+     three — so they live in TN.reflow now and are called from there. The
+     implementations moved verbatim, so output is unchanged; the thin
+     wrappers stay so STEPS and its per-step reporting are untouched.
 
-  function removeDoubleSpaces(text) {
-    // Python \s and JS \s differ on a few exotic characters. For prose out of
-    // Word the practical difference is nil, and this keeps behaviour aligned.
-    return text.replace(RE_WS, ' ');
-  }
+     RE_NL, RE_CR and RE_WS above are kept because other steps read them.
 
-  function trimText(text) { return text.trim(); }
+     If reflow.js failed to load, falling back to a local copy would hide the
+     fault and ship a page that half works. Better to fail where it broke. */
+  var reflow = (window.TN && window.TN.reflow) || null;
+  if (!reflow) throw new Error('TN.reflow is required — check assets/js/reflow.js is loaded');
+
+  function removeLineBreaks(text) { return reflow.joinLines(text); }
+
+  function removeDoubleSpaces(text) { return reflow.collapseWhitespace(text); }
+
+  function trimText(text) { return reflow.trim(text); }
 
   function curlyDoubleToSingle(text) {
     return text.replace(RE_LDQUO, '\u2018').replace(RE_RDQUO, '\u2019');
