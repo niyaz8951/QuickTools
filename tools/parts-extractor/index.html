@@ -41,6 +41,23 @@
       <p class="hint" id="file-note">No workbooks chosen yet.</p>
     </section>
 
+    <!-- 1b — Model name map -->
+    <section class="panel" aria-labelledby="step-map">
+      <div class="panel__head"><h2 id="step-map">Model name map <span class="pe-optional">optional</span></h2></div>
+      <p class="muted">Add the Parts List Overview workbook and each row gains its DENV
+        model name. The parts lists name a unit by its column header (<code>MNG Mono 029.1</code>);
+        the overview maps a full MCQ name to its DENV equivalent. The link is rebuilt from the
+        parts list number in the file name, the capacity in the column header, and the sheet name.</p>
+
+      <div id="map-drop" class="pe-drop pe-drop--slim" tabindex="0" role="button"
+           aria-label="Choose the overview workbook or drop it here">
+        <p class="pe-drop__title">Choose the overview workbook</p>
+        <p class="pe-drop__hint">the file with MCQ-Modelname and DENV-Modelname columns</p>
+      </div>
+      <input type="file" id="map-input" accept=".xls,.xlsx,.xlsm" class="sr-only">
+      <p class="hint" id="map-note">No map chosen — the DENV column will be left out.</p>
+    </section>
+
     <!-- 2 — Options -->
     <section class="panel" aria-labelledby="step-options">
       <div class="panel__head"><h2 id="step-options">Options</h2></div>

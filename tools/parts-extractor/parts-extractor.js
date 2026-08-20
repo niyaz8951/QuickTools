@@ -26,6 +26,7 @@
   var keepDash = $('#keep-dash');
 
   var chosen = [];        // File objects
+  var mapFile = null;     // the optional overview workbook
   var worker = null;
   var startedAt = 0;
   var result = null;      // { buffer, rowCount, ... }
@@ -98,6 +99,40 @@
     fileInput.value = '';       // so the same file can be re-picked after removal
   });
 
+  /* ---------------- optional model map ---------------- */
+
+  var mapDrop = $('#map-drop');
+  var mapInput = $('#map-input');
+  var mapNote = $('#map-note');
+
+  function setMapFile(f) {
+    mapFile = f || null;
+    if (mapFile) {
+      mapNote.textContent = mapFile.name + ' — each row will gain its DENV model name.';
+      mapNote.className = 'hint pe-map-set';
+    } else {
+      mapNote.textContent = 'No map chosen — the DENV column will be left out.';
+      mapNote.className = 'hint';
+    }
+  }
+
+  mapDrop.addEventListener('click', function () { mapInput.click(); });
+  mapDrop.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); mapInput.click(); }
+  });
+  mapDrop.addEventListener('dragover', function (e) {
+    e.preventDefault(); mapDrop.classList.add('is-dragover');
+  });
+  mapDrop.addEventListener('dragleave', function () { mapDrop.classList.remove('is-dragover'); });
+  mapDrop.addEventListener('drop', function (e) {
+    e.preventDefault(); mapDrop.classList.remove('is-dragover');
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) setMapFile(e.dataTransfer.files[0]);
+  });
+  mapInput.addEventListener('change', function () {
+    if (mapInput.files && mapInput.files[0]) setMapFile(mapInput.files[0]);
+    mapInput.value = '';
+  });
+
   /* ---------------- progress ---------------- */
 
   function showProgress(on) {
@@ -167,24 +202,28 @@
     /* Files are read here, on the main thread, because FileReader in a worker
        adds nothing — the read itself is not what costs the seconds. Buffers
        are transferred, not copied. */
+    var all = mapFile ? chosen.concat([mapFile]) : chosen;
     var buffers = [];
-    var pending = chosen.length;
-    chosen.forEach(function (f, i) {
+    var pending = all.length;
+
+    function send() {
+      var mapBuf = mapFile ? buffers.pop() : null;   // the map is last in `all`
+      worker.postMessage(
+        { files: buffers, keepDash: keepDash.checked, mapFile: mapBuf },
+        buffers.map(function (b) { return b.buffer; })
+          .concat(mapBuf ? [mapBuf.buffer] : [])
+      );
+    }
+
+    all.forEach(function (f, i) {
       var reader = new FileReader();
       reader.onload = function () {
         buffers[i] = { name: f.name, buffer: reader.result };
-        if (--pending === 0) {
-          worker.postMessage(
-            { files: buffers, keepDash: keepDash.checked },
-            buffers.map(function (b) { return b.buffer; })
-          );
-        }
+        if (--pending === 0) send();
       };
       reader.onerror = function () {
         buffers[i] = { name: f.name, buffer: new ArrayBuffer(0) };
-        if (--pending === 0) {
-          worker.postMessage({ files: buffers, keepDash: keepDash.checked });
-        }
+        if (--pending === 0) send();
       };
       reader.readAsArrayBuffer(f);
     });
@@ -219,6 +258,9 @@
       stat('seconds', (msg.ms / 1000).toFixed(1))
     );
     if (msg.flagCount) statsEl.append(stat('headers to check', String(msg.flagCount)));
+    if (msg.mapTotal) {
+      statsEl.append(stat('headers mapped', msg.mapped + ' / ' + msg.mapTotal));
+    }
     if (problems) statsEl.append(stat('failures', String(problems)));
 
     logBody.innerHTML = '';
@@ -236,9 +278,13 @@
 
     resultPanel.hidden = false;
     downloadBtn.disabled = msg.rowCount === 0;
-    runNote.textContent = msg.rowCount
-      ? ''
-      : 'No parts tables were recognised. Check the log below.';
+    var notes = [];
+    if (!msg.rowCount) notes.push('No parts tables were recognised. Check the log below.');
+    if (msg.mapNote) notes.push(msg.mapNote);
+    if (msg.mapTotal && msg.mapped < msg.mapTotal) {
+      notes.push((msg.mapTotal - msg.mapped) + ' column header(s) found no model match — see QA_Model_Map.');
+    }
+    runNote.textContent = notes.join(' · ');
   }
 
   downloadBtn.addEventListener('click', function () {
@@ -258,6 +304,7 @@
 
   clearBtn.addEventListener('click', function () {
     chosen = [];
+    setMapFile(null);
     result = null;
     resultPanel.hidden = true;
     logBody.innerHTML = '';

@@ -275,9 +275,138 @@ function extractSheet(ws, fileName, sheetName, keepDash) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 4b. Model name mapping  (MCQ -> DENV)
+ *
+ * The parts lists identify a unit by a column header like "MNG Mono 029.1".
+ * The overview workbook maps a full MCQ model name to its DENV equivalent,
+ * e.g. McEnergyMonoSE029.1ST134 -> EWAD100E-SS. The MCQ names themselves never
+ * appear in the parts lists, so they have to be reconstructed from what is
+ * there: the file name, the sheet name, and the column header.
+ *
+ * Three keys, narrowest first:
+ *
+ *   1. PARTS LIST NUMBER, from the file name. "n_19-McEnergy_Mono..." and
+ *      "n°19-..." both give 19, which is the "Parts list n°" column in the
+ *      overview. This alone cuts 2,970 rows to a few dozen and is the reason
+ *      the rest can be loose without going wrong.
+ *   2. CAPACITY, from the column header. "MNG Mono 029.1" -> "029.1", which
+ *      must appear in the MCQ name. This is the real discriminator: it is what
+ *      separates one unit from its siblings in the same family.
+ *   3. EVERYTHING ELSE, scored not filtered. Alphabetic tokens from the sheet
+ *      name and the header ("MONO", "SE", "ST", "LN", "MNG") are counted as
+ *      substrings of the MCQ name, and the highest-scoring candidates win.
+ *
+ * ONE HEADER OFTEN MATCHES SEVERAL UNITS, AND THAT IS THE CORRECT ANSWER.
+ * Sheet "Mono SE ST_LN" covers both the standard and low-noise variants, and
+ * parts list 19 covers the condenserless (CU) units too, so "MNG Mono 029.1"
+ * legitimately maps to four DENV names. The quantity in that column applies to
+ * all four. Collapsing them to one would be inventing an answer, so every
+ * match is listed and the count is reported alongside.
+ */
+
+function partsListNumber(fileName) {
+  // "n_19-...", "n°19-...", "n 19 - ...", "19-McEnergy..." all give "19".
+  const m = String(fileName).match(/^\s*(?:n\s*[_\u00b0\u00ba.\-]?\s*)?(\d{1,3})\b/i);
+  return m ? String(parseInt(m[1], 10)) : null;
+}
+
+function tokens(text) {
+  return (String(text).toUpperCase().match(/[A-Z]+|[0-9]+(?:\.[0-9]+)?/g) || []);
+}
+
+function isNumericToken(t) { return /^[0-9]/.test(t); }
+
+/* Build the lookup once per run: { partsListNo: [{ mcq, mcqNorm, denv }] }. */
+function buildModelMap(sheet) {
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const byList = new Map();
+  let pairs = 0;
+  for (const r of rows) {
+    // Header spellings differ between revisions of the overview file.
+    const no = String(r['Parts list n°'] ?? r['Parts list no'] ?? r['Parts List'] ?? '').trim();
+    const mcq = String(r['MCQ-Modelname'] ?? r['MCQ Modelname'] ?? '').trim();
+    const denv = String(r['DENV-Modelname'] ?? r['DENV Modelname'] ?? '').trim();
+    /* Over half the overview has a DENV name and NO MCQ name — newer units
+       with no McQuay equivalent. Requiring both would discard them and leave
+       every parts list built on those models unmatched, so the DENV name is
+       what is required and the MCQ name is a bonus. Matching then runs against
+       whichever name exists, which is right either way: for a DENV-only family
+       the parts list headers describe DENV units in the first place. */
+    if (!denv) continue;
+    if (/^no parts list/i.test(mcq)) continue;   // placeholder text, not a model
+    const key = no ? String(parseInt(no, 10)) : '';
+    if (!byList.has(key)) byList.set(key, []);
+    const target = mcq || denv;
+    byList.get(key).push({
+      mcq, denv,
+      mcqNorm: target.toUpperCase().replace(/[^A-Z0-9.]/g, ''),
+    });
+    pairs++;
+  }
+  return { byList, pairs };
+}
+
+/* Returns { mcq: [...], denv: [...], how: 'list+capacity' | ... }. */
+function matchModels(map, fileName, sheetName, attribute) {
+  if (!map) return null;
+
+  const listNo = partsListNumber(fileName);
+  let pool = listNo !== null ? (map.byList.get(listNo) || []) : [];
+  let scope = 'list';
+  if (!pool.length) {
+    // No usable parts list number, or none of its rows survived. Searching the
+    // whole table is far weaker, so it is done but labelled as such.
+    pool = [].concat(...map.byList.values());
+    scope = 'all lists';
+  }
+  if (!pool.length) return null;
+
+  const attrTokens = tokens(attribute);
+  const sheetTokens = tokens(sheetName);
+  const caps = attrTokens.filter(isNumericToken);
+  const words = [...attrTokens, ...sheetTokens].filter((t) => !isNumericToken(t) && t.length >= 2);
+
+  let candidates = pool;
+  let how = scope;
+
+  if (caps.length) {
+    /* The capacity must appear. Leading zeros are inconsistent between the
+       header and the model name, so "29.1" and "029.1" are both tried. */
+    const wanted = [];
+    for (const c of caps) {
+      wanted.push(c);
+      const stripped = c.replace(/^0+/, '');
+      if (stripped && stripped !== c) wanted.push(stripped);
+      wanted.push('0' + c);
+    }
+    const hit = pool.filter((p) => wanted.some((w) => p.mcqNorm.includes(w)));
+    if (hit.length) { candidates = hit; how = scope + '+capacity'; }
+    else return { mcq: [], denv: [], how: 'no capacity match', count: 0 };
+  }
+
+  // Score on the remaining words; keep every candidate on the top score.
+  let bestScore = -1;
+  const scored = candidates.map((p) => {
+    let sc = 0;
+    for (const w of words) if (p.mcqNorm.includes(w)) sc++;
+    if (sc > bestScore) bestScore = sc;
+    return { p, sc };
+  });
+  const winners = scored.filter((x) => x.sc === bestScore).map((x) => x.p);
+
+  return {
+    mcq: winners.map((p) => p.mcq),
+    denv: winners.map((p) => p.denv),
+    how: bestScore > 0 ? how + '+name' : how,
+    count: winners.length,
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * 5. Driver
  * ------------------------------------------------------------------ */
 const COLS = ['Source File', 'Sheet', 'Section', ...DESCRIPTOR_ORDER, 'Attribute', 'Value'];
+const MAP_COLS = ['MCQ-Modelname', 'DENV-Modelname', 'Model Match'];
 
 function aoaFromObjects(objs, cols) {
   const out = [cols];
@@ -286,10 +415,25 @@ function aoaFromObjects(objs, cols) {
 }
 
 self.onmessage = async (e) => {
-  const { files, keepDash } = e.data;
+  const { files, keepDash, mapFile } = e.data;
   const started = Date.now();
 
   try {
+    /* Optional overview workbook. Without it the tool behaves exactly as
+       before and the three mapping columns are simply absent. */
+    let modelMap = null;
+    let mapNote = '';
+    if (mapFile && mapFile.buffer && mapFile.buffer.byteLength) {
+      try {
+        const mwb = XLSX.read(mapFile.buffer, { type: 'array' });
+        modelMap = buildModelMap(mwb.Sheets[mwb.SheetNames[0]]);
+        mapNote = `${modelMap.pairs} model pairs from ${mapFile.name}`;
+        if (!modelMap.pairs) { modelMap = null; mapNote = `no MCQ/DENV pairs found in ${mapFile.name}`; }
+      } catch (err) {
+        modelMap = null;
+        mapNote = `could not read ${mapFile.name}: ${err.message}`;
+      }
+    }
     const rows = [];
     const log = [];
     let done = 0;
@@ -352,6 +496,33 @@ self.onmessage = async (e) => {
       }
     }
 
+    /* --- model name mapping ---------------------------------------------
+       Matching is per distinct file + sheet + column header, not per row: a
+       sheet with 1,650 rows has ten distinct headers, so this runs ten times
+       rather than 1,650. */
+    const mapCache = new Map();
+    const mapAudit = new Map();
+    if (modelMap) {
+      for (const r of rows) {
+        const key = `${r['Source File']}\u0001${r['Sheet']}\u0001${r['Attribute']}`;
+        let hit = mapCache.get(key);
+        if (hit === undefined) {
+          hit = matchModels(modelMap, r['Source File'], r['Sheet'], r['Attribute']);
+          mapCache.set(key, hit);
+          mapAudit.set(key, {
+            'Source File': r['Source File'], 'Sheet': r['Sheet'], 'Attribute': r['Attribute'],
+            'Matches': hit ? hit.count : 0,
+            'MCQ-Modelname': hit ? hit.mcq.join(' / ') : '',
+            'DENV-Modelname': hit ? hit.denv.join(' / ') : '',
+            'Model Match': hit ? hit.how : 'no map',
+          });
+        }
+        r['MCQ-Modelname'] = hit ? hit.mcq.join(' / ') : '';
+        r['DENV-Modelname'] = hit ? hit.denv.join(' / ') : '';
+        r['Model Match'] = hit ? `${hit.count} · ${hit.how}` : 'no match';
+      }
+    }
+
     /* Headers treated as models that may really be descriptors — the early
        warning that a workbook uses a spelling the dictionary does not know. */
     const flags = new Map();
@@ -375,7 +546,9 @@ self.onmessage = async (e) => {
     self.postMessage({ type: 'progress', fraction: 1, label: 'Writing the workbook' });
 
     const wbOut = XLSX.utils.book_new();
-    const outCols = rows.length ? [...COLS, 'Attribute Raw'] : COLS;
+    const outCols = rows.length
+      ? [...COLS, 'Attribute Raw', ...(modelMap ? MAP_COLS : [])]
+      : COLS;
     XLSX.utils.book_append_sheet(wbOut,
       XLSX.utils.aoa_to_sheet(aoaFromObjects(rows, outCols)), 'Parts_Long');
     XLSX.utils.book_append_sheet(wbOut,
@@ -392,6 +565,15 @@ self.onmessage = async (e) => {
       XLSX.utils.book_append_sheet(wbOut,
         XLSX.utils.aoa_to_sheet(aoaFromObjects([...summary.values()], ['Source File', 'Sheet', 'Attribute', 'Rows'])), 'Model_Summary');
     }
+    if (mapAudit.size) {
+      /* One row per column header rather than per data row: this is the sheet
+         to eyeball once to confirm the matching is sane, and it is a few dozen
+         rows rather than tens of thousands. */
+      XLSX.utils.book_append_sheet(wbOut,
+        XLSX.utils.aoa_to_sheet(aoaFromObjects([...mapAudit.values()],
+          ['Source File', 'Sheet', 'Attribute', 'Matches', 'MCQ-Modelname', 'DENV-Modelname', 'Model Match'])),
+        'QA_Model_Map');
+    }
 
     const buf = XLSX.write(wbOut, { bookType: 'xlsx', type: 'array' });
 
@@ -402,6 +584,9 @@ self.onmessage = async (e) => {
       log,
       flagCount: flags.size,
       renameCount: renames.size,
+      mapNote,
+      mapped: mapAudit.size ? [...mapAudit.values()].filter((a) => a.Matches > 0).length : 0,
+      mapTotal: mapAudit.size,
       ms: Date.now() - started,
     }, [buf]);
   } catch (err) {

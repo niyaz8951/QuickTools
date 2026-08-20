@@ -86,3 +86,19 @@
   .pe-progress .meter { flex: 1 1 100%; order: -1; }
   .pe-file { flex-wrap: wrap; }
 }
+
+/* The optional map picker is secondary to the main dropzone, so it is shorter
+   and does not compete for attention. */
+.pe-drop--slim { padding: var(--space-4) var(--space-3); }
+
+.pe-optional {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  font-weight: 400;
+  margin-left: var(--space-2);
+}
+
+.pe-map-set { color: var(--color-success); }
