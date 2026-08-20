@@ -1,6 +1,6 @@
 # Thinkneering — Tools
 
-Two browser tools for engineering office work:
+Four browser tools for engineering office work:
 
 - **Compliance Maker** — turns a specification PDF (or pasted text) into a numbered
   compliance matrix and exports it as a formatted `.xlsx`.
@@ -9,6 +9,10 @@ Two browser tools for engineering office work:
 - **Parts List Extractor** — reads a set of spare parts list workbooks, finds the
   header row on every sheet, maps the varying spellings to one schema, expands
   merged cells and unpivots the per-model quantity columns into one long table.
+- **Text Cleaner** — tidies manuscript text for a reader: straightens curly quotes,
+  puts each line of speech on its own line, rewraps long paragraphs at a sentence
+  boundary and spaces out scene breaks. Paste anywhere on the page and the cleaned
+  text goes straight back to the clipboard.
 
 Everything runs in the visitor's browser. There is no server, no database, no
 accounts and no analytics. Files that are opened are read locally and never
@@ -54,9 +58,10 @@ Then open <http://localhost:8000>.
 ## Structure
 
 ```
-index.html                              home page, two tiles
+index.html                              home page, one tile per tool
 assets/css/global.css                   design tokens + shared components
 assets/js/global.js                     header, footer, theme toggle, helpers
+assets/js/reflow.js                     TN.reflow — shared de-wrapping logic
 data/highlight-rules.json               words the Compliance Maker highlights
 tools/compliance-maker/
   index.html
@@ -71,6 +76,10 @@ tools/parts-extractor/
   styles.css
   parts-extractor.js                    file picking, progress, download
   extractor-worker.js                   the extraction itself
+tools/text-cleaner/
+  index.html
+  styles.css
+  textcleaner.js                        the cleaning steps and the paste fast path
 ```
 
 ## External dependencies
@@ -108,6 +117,46 @@ load, the CSS falls back to the system sans-serif and the layout still holds.
 - The Compliance Maker's highlight words live in `data/highlight-rules.json`,
   as three lists: `red`, `redbold` and `underline`. All entries are lowercase;
   matching is case-insensitive and whole-word.
+- `assets/js/reflow.js` (`TN.reflow`) holds the de-wrapping logic both text
+  tools need: deciding whether a line break is the author's intent or the page
+  running out of width. `joinLines`, `collapseWhitespace` and `trim` moved
+  there verbatim from `textcleaner.js`, so that tool's output is still
+  character-for-character identical to the desktop script. The prose steps —
+  speech turns, curly quotes, scene breaks — deliberately stayed behind,
+  because running them over a specification would corrupt it. The two tools
+  share code, not a page. It is loaded only by the two pages that call it.
+- The Compliance Maker's **Tidy the text first** option (paste pane) runs
+  `TN.reflow.tidyForParsing()`: closes up words split across a line break,
+  drops page numbers and repeated running headers, and normalises quotes,
+  dashes and PDF ligatures. It never joins lines — the parser reads structure
+  off them — and it reports what it removed in the status line rather than
+  changing the text quietly. It applies to pasted text only; extending it to
+  the PDF path is a one-line change if that turns out to be wanted.
+  De-hyphenation keeps the hyphen when the fragment before the break is a
+  common trade prefix (`cross-`, `non-`, `air-`, and the rest of the list in
+  `KEEP_HYPHEN`), because `cross-leakage` silently becoming `crossleakage`
+  is far worse than a stray hyphen you can see.
+- The Compliance Maker promotes bare labels — `1  Wheel Media`, with no full
+  stop — before parsing, in `normaliseBareLabels()`. Promoting every leading
+  number would be worse than the bug it fixes, because `25 mm nominal bore`
+  opens a line identically and a false label splits a clause in two. The test
+  used is that labels count: candidates are promoted only where they form an
+  ascending run (1, 2, 3), or where a lone candidate is the number 1. A run is
+  closed by a part or section header, so numbering may restart underneath one.
+  Clause text must also open with a capital, which is what separates a label
+  from `2 pumps and a common header` mid-sentence.
+- The Compliance Maker's parser folds an unlabelled line into the clause above
+  it, because in a PDF a line break is where the page ran out of width, not
+  where the author ended a thought. Pasted text is different — there the breaks
+  are deliberate — so the paste pane carries a **Keep line breaks** option that
+  passes `keepBreaks` to `parseLines()` and turns every line into its own row.
+  It is off by default, since text copied out of a PDF viewer arrives wrapped.
+  The PDF path never passes the flag.
+- The Text Cleaner's transforms are the `STEPS` array near the top of
+  `textcleaner.js`. Order is significant — later steps assume the earlier ones
+  have run — so add a step at the point in the array where it belongs rather
+  than at the end. Its settings are kept in `localStorage` under
+  `tn.text-cleaner.settings`; clearing site data resets them.
 
 ## Licence
 

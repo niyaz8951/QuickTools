@@ -100,13 +100,8 @@ family and per year — **anything not in the dictionary is assumed to be a mode
 column.** New model codes need no change to anything.
 
 Header text is normalised before lookup: newlines and runs of whitespace collapse,
-case is dropped, `n°` folds to `no`, and trailing `:` or `.` are stripped. A second
-pass retries with all spaces removed, so `Denv Partnumber` still resolves.
-
-The `n°` rule earns its place: it is the French abbreviation for *number*, and headers
-written at the Belgian and French sites use it — `Denv Partn°`, `Part n°`. Folding it
-in `norm()` means one rule instead of an alias per punctuation variant, and it catches
-both the degree sign (U+00B0) and the masculine ordinal (U+00BA), which both appear.
+case is dropped, and trailing `:` or `.` are stripped. A second pass retries with all
+spaces removed, so `Denv Partnumber` still resolves.
 
 The same test runs against *every* row, not just the first match. That single decision
 handles two problems at once: the header can sit anywhere, and every repeated page
@@ -114,23 +109,6 @@ header further down is recognised and skipped rather than becoming a data row. W
 repeat carries a *different* model list, the model mapping is replaced from that row
 on and the `headerVariants` counter increments — some sheets genuinely change layout
 partway down, and the log reports it.
-
-#### Repeats merge, they do not replace
-
-A repeated page header often omits labels the first header carried — the printer only
-needed them at the top of the sheet. Replacing the mapping wholesale on every repeat
-therefore **drops those columns for the rest of the sheet, silently**: the column ends
-up in neither the descriptor mapping nor the model list, so nothing ever reads it, and
-nothing reports it either.
-
-This is not hypothetical. In `n°19 McEnergy Mono`, `Denv Partn°` is labelled only in
-the header on row 2; the ten repeats below it leave that cell blank. Wholesale
-replacement lost 142 of 150 DENV part numbers and put the other 8 in the wrong column.
-
-So a repeat is merged into what is already known: a previous mapping is retained only
-where the repeat leaves that column **genuinely blank**. A repeat that *renames* a
-column still wins — `DAE Partn°` appearing where `Denv Partn°` used to be moves the
-column, it does not get overruled by history.
 
 ### 2.4 Drop title and noise rows
 
@@ -223,10 +201,7 @@ Five sheets:
 
 `QA_Check_Headers` is the one to read after every run. It matches model names against
 `part|number|stock|wiring|circuit|detail|item|drawing|description|critical|ref` and
-flags any hit. Note there is deliberately **no closing word boundary** on that
-pattern: with one, `Denv Partn°` did not match `\bpart\b`, because `part` is followed
-by another word character — the test missed precisely the case it exists to catch.
-Over-flagging here costs nothing; the sheet is meant to be read. A descriptor column with an unknown spelling gets treated as a model
+flags any hit. A descriptor column with an unknown spelling gets treated as a model
 column and silently unpivoted into nonsense — this catches that, and the fix is
 always to add one alias to the dictionary.
 
@@ -341,11 +316,7 @@ distinct-value guard still protects genuine data.
 
 ## 6. Known limits
 
-**Two columns claiming the same canonical name.** The first one wins and the second is
-dropped. If a sheet has both `DAE Partn°` and `Part Number`, only the leftmost reaches
-`Part Number DAE`. Faithful to the Python reference, and not seen in the real set.
-
-**The header dictionary is a whitelist by omission.** Because anything
+**Grid tiling of the header dictionary is a whitelist by omission.** Because anything
 unknown is treated as a model column, a *descriptor* column with an unrecognised
 spelling becomes a phantom model. `QA_Check_Headers` exists specifically to catch
 this, but it catches it after the fact — read that sheet.
@@ -365,23 +336,7 @@ current ten workbooks would want streaming.
 
 ---
 
-## 7. Where this differs from the Python reference
-
-The browser tool was built as a faithful port and stays row-for-row identical to
-`extract_parts_lists.py` on the test set. Two rules have since been added to it that
-the Python does not have:
-
-1. **`n°` folding** in `norm()`.
-2. **Merging repeated headers** instead of replacing them (§2.3).
-
-Both are fixes for real faults found in `n°19 McEnergy Mono`, and the Python has the
-same faults on that file — it would also lose the DENV column. If the Python tool is
-still in use, both changes are worth backporting: one line in `norm()`, and a merge
-step where `mapping, models = m, mo` currently assigns.
-
----
-
-## 8. Why the browser version is more accurate than the Power Query one
+## 7. Why the browser version is more accurate than the Power Query one
 
 Two of the Power Query implementation's stated limits do not apply here.
 

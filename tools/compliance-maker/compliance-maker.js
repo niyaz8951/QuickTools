@@ -44,6 +44,8 @@
   var panePdf    = document.getElementById('pane-pdf');
   var paneText   = document.getElementById('pane-text');
   var pasteInput = document.getElementById('paste-input');
+  var keepBreaks = document.getElementById('keep-breaks');
+  var tidyFirst  = document.getElementById('tidy-first');
   var btnConvert = document.getElementById('btn-convert');
   var convertHint= document.getElementById('convert-hint');
   var pageLimitNote = document.getElementById('page-limit-note');
@@ -115,6 +117,73 @@
     return { type: 'text', sr: '', spec: line.trim() };
   }
 
+  /* ---------------------------------------------------------------------
+     BARE LABELS — "1  Wheel Media", with no full stop after the number.
+
+     Spec authors write these constantly, and every strict pattern above
+     misses them, so the clause underneath is read as a wrap and glued on.
+     That is the whole reason a five-clause paste came out as one row.
+
+     Promoting any leading number would be worse than the bug. "25 mm
+     nominal bore" and "2019 edition" open a line exactly the same way, and
+     a number wrongly promoted to a label splits a clause in half — a
+     failure that is much harder to spot in a 300-row matrix than a missed
+     label is.
+
+     What separates a label from a stray number is that labels COUNT. So
+     candidates are collected first and only promoted where they form an
+     ascending run: 1, 2, 3 in order. A lone number is promoted only when
+     it is 1, which is a list beginning. "25 mm" has nothing before it and
+     nothing after, so it stays part of its sentence.
+     --------------------------------------------------------------------- */
+  var RE_BARE = /^(\d{1,2})[ \t]+(\S.*)$/;
+
+  // A label's text reads like the start of a clause. These open a
+  // measurement or a count instead, so the number in front is a quantity.
+  var RE_UNIT = /^(mm|cm|m|km|kg|g|lb|t|%|deg|k|hz|kw|kva|hp|w|v|a|bar|pa|kpa|psi|cfm|ls|m2|m3|nos?|off|x|to|and|or|of|per|min|mins|minutes|hour|hours|hrs|day|days|week|weeks|month|months|year|years|pcs|sets?|units?|copies|no)\b/i;
+
+  function normaliseBareLabels(lines) {
+    var runs = [], run = [];
+    function closeRun() { if (run.length) runs.push(run); run = []; }
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = String(lines[i]).replace(/\s+/g, ' ').trim();
+      if (!line) continue;
+
+      // A part or section header ends whatever list was running — numbering
+      // restarts underneath it.
+      if (RE.part.test(line) || RE.section.test(line)) { closeRun(); continue; }
+
+      // Already labelled by a strict pattern; leave it alone.
+      if (RE.number.test(line) || RE.letter.test(line) || RE.letterLoose.test(line)) continue;
+
+      var m = line.match(RE_BARE);
+      if (!m) continue;
+      var rest = m[2];
+
+      // A clause opens with a capital. A quantity ("2 pumps and a tank")
+      // usually does not, and that is the cheapest signal available that
+      // tells the two apart mid-sentence.
+      if (!/^[A-Z(\u201c"']/.test(rest)) continue;
+      if (RE_UNIT.test(rest)) continue;
+
+      var n = parseInt(m[1], 10);
+      var cand = { i: i, n: n, sr: m[1], rest: rest };
+      if (run.length && n === run[run.length - 1].n + 1) run.push(cand);
+      else { closeRun(); run = [cand]; }
+    }
+    closeRun();
+
+    var out = lines.slice();
+    runs.forEach(function (r) {
+      // Two or more in sequence is a list. One on its own is a list only if
+      // it is the number 1.
+      if (r.length < 2 && r[0].n !== 1) return;
+      r.forEach(function (c) { out[c.i] = c.sr + '. ' + c.rest; });
+    });
+    return out;
+  }
+
   // "END OF SECTION" closes a specification section. It is a divider, not a
   // clause — but it arrives at the tail of the last clause's line, where the
   // continuation rule would silently glue it onto that clause's text. So it
@@ -122,7 +191,16 @@
   // treatment a PART header gets.
   var END_OF_SECTION_RE = /\bend\s+of\s+section\b[.:\s]*$/i;
 
-  function parseLines(rawLines) {
+  // opts.keepBreaks — treat every line as its own row instead of folding
+  // unlabeled lines into the clause above. Only the paste path passes this;
+  // a PDF's line breaks come from the page layout, not the author, so folding
+  // them back together is the only way to recover the real clause there.
+  function parseLines(rawLines, opts) {
+    var keepBreaks = !!(opts && opts.keepBreaks);
+    // Promote bare labels before anything else looks at the lines, so the
+    // rest of the parser sees one canonical label shape. The copy also keeps
+    // the END OF SECTION splice below from mutating the caller's array.
+    rawLines = normaliseBareLabels(rawLines);
     var rows = [];
     for (var i = 0; i < rawLines.length; i++) {
       var line = rawLines[i].replace(/\s+/g, ' ').trim();
@@ -144,7 +222,7 @@
 
       if (startsNewItem(line)) {
         rows.push(classify(line));
-      } else if (rows.length &&
+      } else if (!keepBreaks && rows.length &&
                  rows[rows.length - 1].type !== 'part' &&
                  rows[rows.length - 1].type !== 'section') {
         // Wrapped continuation of the previous clause — append.
@@ -496,8 +574,25 @@
       }
       currentName = 'compliance-matrix';
       setConverting(true);
-      var rows = parseLines(raw.split(/\r\n|\r|\n/));
-      finishBuild(rows, 'Done — ' + rows.length + ' rows' + trimmed);
+
+      // Tidy runs on the pasted text only, and never joins lines — the parser
+      // reads structure off them. What it removed is reported rather than done
+      // quietly, because a step that silently drops lines is one you cannot
+      // trust on a document you have not read.
+      var tidyNote = '';
+      if (tidyFirst && tidyFirst.checked && window.TN && window.TN.reflow) {
+        var t = window.TN.reflow.tidyForParsing(raw);
+        raw = t.text;
+        var did = [];
+        if (t.removed) did.push(t.removed + (t.removed === 1 ? ' page line' : ' page lines') + ' removed');
+        if (t.joins) did.push(t.joins + (t.joins === 1 ? ' split word' : ' split words') + ' rejoined');
+        if (t.punctuation) did.push('punctuation straightened');
+        if (did.length) tidyNote = ' · tidy: ' + did.join(', ');
+      }
+
+      var rows = parseLines(raw.split(/\r\n|\r|\n/),
+                            { keepBreaks: keepBreaks && keepBreaks.checked });
+      finishBuild(rows, 'Done — ' + rows.length + ' rows' + trimmed + tidyNote);
       setConverting(false);
     }
   }
