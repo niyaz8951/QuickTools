@@ -1,11 +1,14 @@
 # Thinkneering — Tools
 
-Four browser tools for engineering office work:
+Five browser tools for engineering office work:
 
 - **Compliance Maker** — turns a specification PDF (or pasted text) into a numbered
   compliance matrix and exports it as a formatted `.xlsx`.
 - **Container Calculator** — works out how many containers or trailers a shipment
   needs, with a load plan, stowage drawings and a PDF report.
+- **Centre of Gravity** — build a unit out of rectangular blocks with a position, a
+  size and a weight; get the combined centre of gravity on a 3D model, the load
+  carried by each mounting foot, and a tipping check against the support outline.
 - **Parts List Extractor** — reads a set of spare parts list workbooks, finds the
   header row on every sheet, maps the varying spellings to one schema, expands
   merged cells and unpivots the per-model quantity columns into one long table.
@@ -71,6 +74,10 @@ tools/container-calculator/
   index.html
   styles.css
   js/app.js, packer.js, draw.js, xlsx-io.js, pdf.js
+tools/centre-of-gravity/
+  index.html
+  styles.css
+  cog.js                                maths, tables and the 3D canvas view
 tools/parts-extractor/
   index.html
   styles.css
@@ -111,6 +118,16 @@ load, the CSS falls back to the system sans-serif and the layout still holds.
   `assets/css/global.css`. Change them there; nothing hardcodes a raw value.
 - To add a tool: create `tools/<kebab-case-name>/index.html`, add one entry to
   `NAV` in `assets/js/global.js`, and one entry to `TOOLS` in `index.html`.
+- The Centre of Gravity tool's support loads assume a rigid unit on equally
+  stiff supports, so the reactions form a plane through the centre of gravity.
+  Three supports are statically determinate and the answer is exact; four or
+  more are indeterminate and the plane is the standard first-pass distribution.
+  A support that comes out negative is being lifted, not loaded, so it is
+  dropped and the remainder re-solved — the active-set loop in
+  `solveReactions()`. Block colours come from the `--chart-1..8` tokens in
+  `global.css`, so the 3D view follows the theme. The maths is exposed on
+  `TN.cog` and `_dev/test-cog.js` exercises it under plain `node`, no
+  dependencies: `node _dev/test-cog.js` from the repo root.
 - The Parts List Extractor's header dictionary is `HEADER_ALIASES` at the top of
   `extractor-worker.js`. A workbook whose sheet reports "no parts table found"
   usually needs one new alias adding there and nothing else.

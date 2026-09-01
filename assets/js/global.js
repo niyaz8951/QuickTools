@@ -39,7 +39,8 @@
     'arrow-right': '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>',
     table: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>',
     type: '<path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/>',
-    'chevron-down': '<path d="m6 9 6 6 6-6"/>'
+    'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+    crosshair: '<circle cx="12" cy="12" r="9"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6"/>'
   };
 
   function icon(name, size) {
@@ -81,6 +82,7 @@
   var NAV = [
     { href: 'tools/compliance-maker/', title: 'Compliance Maker' },
     { href: 'tools/container-calculator/', title: 'Container Calculator' },
+    { href: 'tools/centre-of-gravity/', title: 'Centre of Gravity' },
     { href: 'tools/parts-extractor/', title: 'Parts List Extractor' },
     { href: 'tools/text-cleaner/', title: 'Text Cleaner' }
   ];
