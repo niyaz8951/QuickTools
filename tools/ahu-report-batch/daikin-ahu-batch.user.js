@@ -1,65 +1,89 @@
 // ==UserScript==
 // @name         Thinkneering — Daikin AHU Batch Report Export
 // @namespace    https://thinkneering.com/
-// @version      1.1.0
+// @version      2.0.0
 // @description  Work through a Daikin project's unit list, saving every unit report as RTF.
 // @author       Thinkneering
 // @match        https://tools.daikinapplied.eu/ManageProjects/*
+// @match        https://*.daikinapplied.eu/Report/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 
 /*
- * Runs inside the Daikin page, reusing the session already logged in. It reads
+ * Runs inside the Daikin pages, reusing the session already logged in. It reads
  * no credentials and sends nothing anywhere — every request it causes is one
  * the portal would have made had you clicked through by hand.
  *
- * Each report is saved by the browser as it is produced. The run starts at the
- * unit you choose and carries on until the grid has no more rows.
+ * WHY THIS SCRIPT RUNS IN THREE PLACES
+ *
+ * The project list is served from tools.daikinapplied.eu, but both dialogs load
+ * their contents from tools4.daikinapplied.eu:
+ *
+ *   #Select-dialog  →  /Report/SelectReportAHU.aspx
+ *   #form-dialog    →  /Report/ReportAHU.aspx
+ *
+ * Different host, different origin. A userscript on the parent page cannot read
+ * or click anything inside those iframes — contentDocument is simply null. That
+ * is a browser guarantee, not a gap to work around. (Selenium had no trouble
+ * here because switch_to.frame drives the browser above the same-origin policy.
+ * A script running inside a page does not get that.)
+ *
+ * So the script loads into all three documents and they talk over postMessage:
+ *
+ *   controller  (ManageProjects)      panel, grid, report button, dialog close
+ *   select      (SelectReportAHU)     ticks the report sections
+ *   report      (ReportAHU)           sets RTF, presses save
+ *
+ * The jQuery UI button bars — "Show Report" and "Close" — belong to the parent
+ * document, not the iframes, so the controller still presses those itself.
  */
 
 (function () {
   'use strict';
 
+  /* ------------------------------------------------------------- constants */
+
   // Element ids taken from the live portal. The most likely thing to break
   // after a vendor update, so they live in one place.
   const SEL = {
-    // The page is a master-detail grid: MainContent_GridProject holds projects,
-    // and each project's detail row contains the GridUnit units grid. Nothing
-    // with a GridUnit id exists until the project row is expanded.
+    // Master-detail grid: MainContent_GridProject holds projects, and each
+    // project's detail row contains the GridUnit units grid. Nothing with a
+    // GridUnit id exists until the project row is expanded.
     projectGrid: 'MainContent_GridProject',
     detailCollapsed: 'img.dxGridView_gvDetailCollapsedButton_Metropolis',
     detailExpanded: 'img.dxGridView_gvDetailExpandedButton_Metropolis',
 
-    // Selection checkbox. The id sits on the outer display span; the inner
-    // input carries the state as "C" or "U", and the span's class switches
-    // between ...CheckBoxChecked... and ...CheckBoxUnchecked....
     unitSelectButton: (i) => `GridUnit_DXSelBtn${i}_D`,
-    unitSelectInput: (i) => `GridUnit_DXSelBtn${i}`,
-
     unitReportButton: (i) => `GridUnit_DXCBtn${6 * i + 1}Img`,
-    optionsDialog: '#Select-dialog',
+
+    // Parent document — jQuery UI renders dialog buttons outside the iframe.
+    generateButton: '#ButtonRep',
+    dialogCloseBar: 'div.ui-dialog-buttonpane.ui-widget-content.ui-helper-clearfix',
+
+    // Inside SelectReportAHU.aspx.
     optFanCurve: '#ASPxFormLayout1_ChkFanCurve_S_D',
     optListPrice: '#ASPxFormLayout1_ChkListPrice_S_D',
-    generateButton: '#ButtonRep',
-    reportDialog: '#form-dialog',
+
+    // Inside ReportAHU.aspx.
     reportCanvas: '#document_AHU_Splitter_1i0_CC',
     formatCombo: '#document_AHU_Splitter_Toolbar_Menu_ITCNT11_SaveFormat_I',
     saveButton: '#document_AHU_Splitter_Toolbar_Menu_DXI9_T',
-    dialogCloseBar: 'div.ui-dialog-buttonpane.ui-widget-content.ui-helper-clearfix',
   };
 
   const TIMEOUT = {
     element: 30000,
+    frame: 45000, // report generation is server-side and can be slow
     settle: 400,
-    download: 2000, // breathing room for the browser to start saving
+    download: 2500, // breathing room for the browser to start saving
   };
 
-  // The loop ends when the grid runs out of rows. This only stops a runaway if
-  // something upstream goes wrong.
+  // The loop ends when the grid runs out of rows. This only guards a runaway.
   const MAX_UNITS = 2000;
 
-  /* ---------------------------------------------------------------- utils */
+  const ORIGIN_OK = /^https:\/\/[a-z0-9-]+\.daikinapplied\.eu$/i;
+
+  /* ----------------------------------------------------------------- utils */
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -86,19 +110,7 @@
     });
   }
 
-  // Dialog iframes exist before their document is parsed, so waiting for the
-  // iframe element alone is not enough.
-  async function frameDocument(iframe, timeout = TIMEOUT.element) {
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
-      const doc = iframe.contentDocument;
-      if (doc && doc.body && doc.readyState !== 'loading') return doc;
-      await sleep(100);
-    }
-    throw new Error('Dialog frame never finished loading');
-  }
-
-  /* --------------------------------------------------------------- clicks */
+  /* ---------------------------------------------------------------- clicks */
 
   /* DevExpress binds to mousedown/mouseup, not to the synthetic event
      `.click()` fires, and the node carrying the id is often a decorative inner
@@ -188,15 +200,14 @@
     throw new Error(`${label}: click had no effect${lastError ? ` (${lastError.message})` : ''}`);
   }
 
-  /* Where the result of a click is observable — a detail row opening — clicking
-     blindly is not good enough. This escalates through the strategies and
-     checks after each whether the page actually changed.
+  /* Escalates through the strategies, checking after each whether the page
+     actually changed.
 
      maxStrategies exists because escalation is dangerous on anything that
      toggles: strategy 2 undoes strategy 1, and the control ends up wherever the
      last attempt left it. Callers driving a toggle cap this low. Anything that
-     genuinely toggles per click, like a checkbox, should not use this at all —
-     see tickRow. */
+     toggles on every click, like a checkbox, must not use this at all — see
+     tickBox. */
   async function pressUntil(el, done, label, { settleMs = 4000, maxStrategies = 4 } = {}) {
     if (!el) throw new Error(`${label}: element not present`);
     if (done()) return true;
@@ -243,11 +254,201 @@
     throw new Error(lastError ? lastError.message : `${label}: #${id} never became clickable`);
   }
 
-  /* ------------------------------------------------------------ grid state */
+  /* -------------------------------------------------------------- checkbox */
 
-  // The detail row is what creates the GridUnit table. Until a project is
-  // expanded, every GridUnit id the run depends on is simply absent — which is
-  // what "cannot find the element" looks like from the outside.
+  /* Reading a DevExpress checkbox.
+
+     The display span's class is the reliable signal, because it is what the
+     page actually renders. The inner input's value is a fallback only: on the
+     grid's selection checkbox it can sit at "U" even once the row is ticked,
+     and reading it first made an earlier version believe every tick had failed.
+
+     "Unchecked" is tested before "Checked" — the two class names differ by one
+     letter and testing in the wrong order misreads the state.
+
+     Returns true, false, or null where neither signal is conclusive. Null means
+     "cannot tell", which is not the same as "not ticked". */
+  function boxState(el) {
+    if (!el) return null;
+    if (/CheckBoxUnchecked/i.test(el.className)) return false;
+    if (/CheckBoxChecked/i.test(el.className)) return true;
+
+    const input = el.querySelector('input');
+    const value = input && input.value ? input.value.toUpperCase() : '';
+    if (value === 'C') return true;
+    if (value === 'U') return false;
+    return null;
+  }
+
+  /* Ticking gets exactly one attempt, on the checkbox itself.
+
+     A checkbox toggles on every click, so escalate-and-recheck is actively
+     wrong here: each strategy undoes the one before it, leaving boxes flickering
+     on and off. It does not fall back to an ancestor either — the row under a
+     grid checkbox carries its own selection handler, so a stray dispatch there
+     can tick a different row than the one asked for. */
+  async function tickBox(el) {
+    const before = boxState(el);
+    if (before === true) return 'already ticked';
+    if (!el) return 'no checkbox found';
+
+    el.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
+    await sleep(150);
+
+    try {
+      mouseSequence(el);
+    } catch (err) {
+      return `tick attempt failed (${err.message})`;
+    }
+
+    await sleep(TIMEOUT.settle);
+    const after = boxState(el);
+    if (after === true) return 'ticked';
+    if (after === null) return 'tick state unknown';
+    return 'tick did not register';
+  }
+
+  /* ================================================================ agents */
+
+  /* The two dialog documents. Each announces itself to the parent until it is
+     given a command, which removes any dependence on load ordering, then does
+     its one job and reports back. */
+
+  function announce(page, isDone) {
+    const beat = () => {
+      if (isDone()) return;
+      try {
+        window.parent.postMessage({ tnahu: true, type: 'ready', page }, '*');
+      } catch (err) {
+        /* parent may not be reachable yet */
+      }
+      setTimeout(beat, 400);
+    };
+    beat();
+  }
+
+  function commandListener(type, handler) {
+    let handled = false;
+    window.addEventListener('message', async (event) => {
+      if (handled) return;
+      if (!ORIGIN_OK.test(event.origin)) return;
+      const message = event.data;
+      if (!message || message.tnahu !== true || message.type !== type) return;
+
+      handled = true;
+      const reply = (payload) => {
+        try {
+          window.parent.postMessage({ tnahu: true, ...payload }, event.origin);
+        } catch (err) {
+          /* nothing useful to do if the parent has gone */
+        }
+      };
+
+      try {
+        reply(await handler(message));
+      } catch (err) {
+        reply({ type: 'failed', message: err.message });
+      }
+    });
+    return () => handled;
+  }
+
+  // SelectReportAHU.aspx — tick the requested report sections.
+  function runSelectAgent() {
+    const isDone = commandListener('do-select', async (message) => {
+      const notes = [];
+
+      if (message.fanCurve) {
+        const el = await waitFor(SEL.optFanCurve);
+        notes.push(`fan curve ${await tickBox(el)}`);
+        await sleep(TIMEOUT.settle);
+      }
+      if (message.listPrice) {
+        const el = await waitFor(SEL.optListPrice);
+        notes.push(`list price ${await tickBox(el)}`);
+        await sleep(TIMEOUT.settle);
+      }
+
+      return { type: 'select-done', notes };
+    });
+
+    announce('select', isDone);
+  }
+
+  // ReportAHU.aspx — switch the export format to RTF, then save.
+  function runReportAgent() {
+    const isDone = commandListener('do-save', async () => {
+      await waitFor(SEL.reportCanvas, { timeout: TIMEOUT.frame });
+
+      const combo = document.querySelector(SEL.formatCombo);
+      if (combo) {
+        combo.value = 'RTF';
+        // The DevExpress combo keeps its real value in a sibling hidden input.
+        const hidden = document.getElementById(`${combo.id.slice(0, -2)}_VI`);
+        if (hidden) hidden.value = 'RTF';
+        combo.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(TIMEOUT.settle);
+      }
+
+      const save = await waitFor(SEL.saveButton, { timeout: TIMEOUT.frame });
+      await press(save, 'Save button');
+      await sleep(TIMEOUT.download);
+
+      return { type: 'save-done', format: combo ? combo.value : 'unchanged' };
+    });
+
+    announce('report', isDone);
+  }
+
+  /* ============================================================ controller */
+
+  /* Talks to the two dialog frames. Frames announce themselves repeatedly, so
+     a waiter registered late still catches the next beat. */
+  const Bridge = {
+    waiters: [],
+
+    init() {
+      window.addEventListener('message', (event) => {
+        if (!ORIGIN_OK.test(event.origin)) return;
+        const message = event.data;
+        if (!message || message.tnahu !== true) return;
+
+        for (let i = 0; i < this.waiters.length; i++) {
+          const waiter = this.waiters[i];
+          if (!waiter.matches(message)) continue;
+          this.waiters.splice(i, 1);
+          clearTimeout(waiter.timer);
+          waiter.resolve({ message, source: event.source, origin: event.origin });
+          return;
+        }
+      });
+    },
+
+    expect(type, page, timeout = TIMEOUT.frame) {
+      return new Promise((resolve, reject) => {
+        const waiter = {
+          matches: (m) =>
+            (m.type === type && (!page || m.page === page)) || m.type === 'failed',
+          resolve: (hit) =>
+            hit.message.type === 'failed'
+              ? reject(new Error(`${page || type} frame: ${hit.message.message}`))
+              : resolve(hit),
+        };
+        waiter.timer = setTimeout(() => {
+          const i = this.waiters.indexOf(waiter);
+          if (i >= 0) this.waiters.splice(i, 1);
+          reject(new Error(`Timed out waiting for the ${page || type} dialog`));
+        }, timeout);
+        this.waiters.push(waiter);
+      });
+    },
+
+    reset() {
+      for (const waiter of this.waiters) clearTimeout(waiter.timer);
+      this.waiters = [];
+    },
+  };
+
   function isProjectExpanded(doc) {
     return !!doc.querySelector(SEL.detailExpanded);
   }
@@ -271,90 +472,6 @@
     return 'expanded';
   }
 
-  /* Reading the tick state.
-
-     The span's class is the reliable signal, because it is what the page
-     actually renders. The inner input's value is checked only as a fallback:
-     on the grid's selection checkbox it can sit at "U" even once the row is
-     ticked, and an earlier version read it first and so believed every tick
-     had failed.
-
-     "Unchecked" is tested before "Checked" — the two class names differ by one
-     letter and testing in the wrong order is an easy way to misread the state.
-
-     Returns true, false, or null where neither signal is conclusive. Null
-     matters: it means "cannot tell", which is not the same as "not ticked",
-     and the caller must not act as though a tick failed just because it could
-     not be confirmed. */
-  function rowSelectionState(doc, index) {
-    const span = doc.getElementById(SEL.unitSelectButton(index));
-    if (span) {
-      if (/CheckBoxUnchecked/i.test(span.className)) return false;
-      if (/CheckBoxChecked/i.test(span.className)) return true;
-    }
-
-    const input = doc.getElementById(SEL.unitSelectInput(index));
-    const value = input && input.value ? input.value.toUpperCase() : '';
-    if (value === 'C') return true;
-    if (value === 'U') return false;
-
-    return null;
-  }
-
-  function isRowSelected(doc, index) {
-    return rowSelectionState(doc, index) === true;
-  }
-
-  /* Ticking a row is best-effort, and deliberately gets exactly one attempt.
-
-     A checkbox is a toggle, so the escalate-and-recheck approach used elsewhere
-     is actively wrong here: each strategy undoes the one before it, leaving
-     boxes flickering on and off and landing on whichever state the last attempt
-     produced. Nor does it fall back to an ancestor — the row element under the
-     checkbox carries its own selection handler, so a stray dispatch there can
-     tick a different row than the one asked for.
-
-     It also never throws. The portal opens the report from the button that was
-     clicked, not from the selection, so a tick that does not register is worth
-     noting and moving past rather than losing the unit over. */
-  async function tickRow(doc, index) {
-    const before = rowSelectionState(doc, index);
-    if (before === true) return 'already ticked';
-
-    const box = doc.getElementById(SEL.unitSelectButton(index));
-    if (!box) return 'no checkbox found';
-
-    // The grid's own client API is cleaner than synthesising a click, where
-    // DevExpress has published the object under the grid's name.
-    const grid = window[SEL.projectGrid] || window.GridUnit;
-    if (grid && typeof grid.SelectRow === 'function') {
-      try {
-        grid.SelectRow(index, true);
-        await sleep(TIMEOUT.settle);
-        if (rowSelectionState(doc, index) === true) return 'ticked';
-      } catch (err) {
-        /* fall through to a single click on the checkbox itself */
-      }
-    }
-
-    box.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
-    await sleep(150);
-
-    try {
-      mouseSequence(box);
-    } catch (err) {
-      return `tick attempt failed (${err.message})`;
-    }
-
-    await sleep(TIMEOUT.settle);
-    const after = rowSelectionState(doc, index);
-    if (after === true) return 'ticked';
-    if (after === null) return 'tick state unknown';
-    return 'tick did not register';
-  }
-
-  /* --------------------------------------------------------------- runner */
-
   const Runner = {
     cancelled: false,
 
@@ -365,53 +482,40 @@
       // An absent report button means the grid has run out of rows.
       if (!doc.getElementById(reportId)) return { done: true };
 
-      // Scroll the row into view first, then tick it. The working Python script
-      // only ever scrolled here — its checkbox click was commented out — and the
-      // report opened from the report button regardless. So the tick is done on
-      // a best-effort basis and its outcome never blocks the export.
-      const how = await tickRow(doc, index);
-      if (how !== 'already ticked') UI.log(`  ${how}`, how === 'ticked' ? 'muted' : 'warning');
+      // Scroll the row in and tick it. The working Python script only ever
+      // scrolled here — its checkbox click was commented out — and the report
+      // opened from the report button regardless. So the tick is best-effort
+      // and its outcome never blocks the export.
+      const tick = await tickBox(doc.getElementById(SEL.unitSelectButton(index)));
+      if (tick !== 'already ticked') UI.log(`  ${tick}`, tick === 'ticked' ? 'muted' : 'warning');
 
+      Bridge.reset();
       await pressById(doc, reportId, `Unit ${index + 1} report button`);
 
-      // 1. Options dialog — which sections the report includes.
-      const optionsFrame = await waitFor(`${SEL.optionsDialog} iframe`);
-      const optionsDoc = await frameDocument(optionsFrame);
+      // 1. Select dialog. Cross-origin, so its own agent does the ticking.
+      const select = await Bridge.expect('ready', 'select');
+      select.source.postMessage(
+        {
+          tnahu: true,
+          type: 'do-select',
+          fanCurve: options.fanCurve,
+          listPrice: options.listPrice,
+        },
+        select.origin
+      );
+      const selected = await Bridge.expect('select-done');
+      for (const note of selected.message.notes || []) UI.log(`  ${note}`, 'muted');
 
-      if (options.fanCurve) {
-        const fanCurve = await waitFor(SEL.optFanCurve, { root: optionsDoc });
-        await press(fanCurve, 'Fan curve checkbox');
-        await sleep(TIMEOUT.settle);
-      }
-      if (options.listPrice) {
-        const listPrice = await waitFor(SEL.optListPrice, { root: optionsDoc });
-        await press(listPrice, 'List price checkbox');
-        await sleep(TIMEOUT.settle);
-      }
-
+      // 2. "Show Report" belongs to the parent document, not the iframe.
       const generate = await waitFor(SEL.generateButton);
-      await press(generate, 'Generate report button');
+      await press(generate, 'Show Report button');
 
-      // 2. Report viewer — switch the export format, then save.
-      const reportFrame = await waitFor(`${SEL.reportDialog} iframe`);
-      const reportDoc = await frameDocument(reportFrame);
-      await waitFor(SEL.reportCanvas, { root: reportDoc });
+      // 3. Report dialog. Also cross-origin; its agent sets RTF and saves.
+      const report = await Bridge.expect('ready', 'report');
+      report.source.postMessage({ tnahu: true, type: 'do-save' }, report.origin);
+      await Bridge.expect('save-done');
 
-      const combo = reportDoc.querySelector(SEL.formatCombo);
-      if (combo) {
-        combo.value = 'RTF';
-        // The DevExpress combo keeps its real value in a sibling hidden input.
-        const hidden = reportDoc.getElementById(`${combo.id.slice(0, -2)}_VI`);
-        if (hidden) hidden.value = 'RTF';
-        combo.dispatchEvent(new reportFrame.contentWindow.Event('change', { bubbles: true }));
-        await sleep(TIMEOUT.settle);
-      }
-
-      const save = await waitFor(SEL.saveButton, { root: reportDoc });
-      await press(save, 'Save button');
-      await sleep(TIMEOUT.download);
-
-      // 3. Close the viewer so the grid is interactive for the next unit.
+      // 4. Close the viewer so the grid is interactive for the next unit.
       const closeBar = document.querySelector(SEL.dialogCloseBar);
       if (closeBar) {
         const button = closeBar.querySelector('button');
@@ -454,6 +558,18 @@
           missed++;
           UI.log(`${label} — ${err.message}`, 'danger');
           UI.count(saved, missed);
+
+          // Leave no dialog open, or the next unit cannot reach the grid.
+          const closeBar = document.querySelector(SEL.dialogCloseBar);
+          const button = closeBar && closeBar.querySelector('button');
+          if (button) {
+            try {
+              await press(button, 'Dialog close button');
+              await sleep(TIMEOUT.settle);
+            } catch (closeErr) {
+              /* nothing more to try; the next unit will report its own failure */
+            }
+          }
           continue;
         }
 
@@ -467,6 +583,7 @@
         UI.count(saved, missed);
       }
 
+      Bridge.reset();
       UI.log(
         `Finished — ${saved} report${saved === 1 ? '' : 's'} saved` +
           (missed ? `, ${missed} failed` : '') + '.',
@@ -480,7 +597,6 @@
   // Shadow DOM keeps the portal's stylesheet out of the panel and the panel's
   // rules out of the portal.
   const UI = {
-    root: null,
     logEl: null,
     countEl: null,
 
@@ -639,7 +755,6 @@
       `;
       shadow.appendChild(panel);
 
-      this.root = shadow;
       this.logEl = shadow.getElementById('log');
       this.countEl = shadow.getElementById('count');
 
@@ -689,45 +804,65 @@
     },
   };
 
-  /* Exposed for console debugging when a step stalls. From the Daikin page:
-       TNAHU.expand()        - expand the first project row
-       TNAHU.selected(0)     - unit 1 tick state (true / false / null)
-       TNAHU.tick(0)         - tick it, verified
-       TNAHU.try('SomeId')   - report what is found, then try to click it
-       TNAHU.selectors       - the ids the run depends on                    */
-  window.TNAHU = {
-    selectors: SEL,
-    press: press,
-    expand: () => ensureProjectExpanded(document),
-    selected: (i) => rowSelectionState(document, i),
-    tick: (i) => tickRow(document, i),
-    async try(id, doc) {
-      const target = (doc || document).getElementById(id);
-      if (!target) {
-        console.log(`#${id} not found in this document — check you are in the right frame.`);
-        return false;
-      }
-      console.log(`#${id}`, {
-        tag: target.tagName,
-        className: target.className,
-        visible: isVisible(target),
-        rect: target.getBoundingClientRect(),
-        handlerTarget: handlerTarget(target),
-      });
-      try {
-        await press(target, id);
-        console.log('click dispatched — check whether the page reacted');
-        return true;
-      } catch (err) {
-        console.log('click failed:', err.message);
-        return false;
-      }
-    },
-  };
+  function runController() {
+    Bridge.init();
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => UI.mount());
-  } else {
-    UI.mount();
+    /* Exposed for console debugging when a step stalls. From the project page:
+         TNAHU.expand()      - expand the first project row
+         TNAHU.state(0)      - unit 1 tick state (true / false / null)
+         TNAHU.tick(0)       - tick it, once, and report the outcome
+         TNAHU.try('SomeId') - report what is found, then try to click it
+         TNAHU.selectors     - the ids the run depends on
+
+       Note that the dialog frames are a different origin, so nothing here can
+       reach inside them. To debug those, open the frame in its own tab. */
+    window.TNAHU = {
+      selectors: SEL,
+      press,
+      expand: () => ensureProjectExpanded(document),
+      state: (i) => boxState(document.getElementById(SEL.unitSelectButton(i))),
+      tick: (i) => tickBox(document.getElementById(SEL.unitSelectButton(i))),
+      async try(id) {
+        const target = document.getElementById(id);
+        if (!target) {
+          console.log(`#${id} not found in this document.`);
+          return false;
+        }
+        console.log(`#${id}`, {
+          tag: target.tagName,
+          className: target.className,
+          visible: isVisible(target),
+          rect: target.getBoundingClientRect(),
+          handlerTarget: handlerTarget(target),
+        });
+        try {
+          await press(target, id);
+          console.log('click dispatched — check whether the page reacted');
+          return true;
+        } catch (err) {
+          console.log('click failed:', err.message);
+          return false;
+        }
+      },
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => UI.mount());
+    } else {
+      UI.mount();
+    }
+  }
+
+  /* ------------------------------------------------------------- dispatch */
+
+  // "SelectReportAHU.aspx" contains "ReportAHU.aspx", so it must be tested
+  // first or the select dialog would run the report agent.
+  const path = location.pathname;
+  if (/SelectReportAHU\.aspx/i.test(path)) {
+    runSelectAgent();
+  } else if (/ReportAHU\.aspx/i.test(path)) {
+    runReportAgent();
+  } else if (/\/ManageProjects\//i.test(path)) {
+    runController();
   }
 })();

@@ -57,9 +57,11 @@
         </li>
         <li>
           <span class="steps__n">3</span>
-          <span class="steps__t">Check the match line</span>
-          <span class="steps__d">Confirm it reads <span class="arb-code">tools.daikinapplied.eu</span>
-            before you accept. That is the only domain the script runs on.</span>
+          <span class="steps__t">Check the match lines</span>
+          <span class="steps__d">There are two, and both stay on
+            <span class="arb-code">daikinapplied.eu</span> — one for the project list, one for the
+            report dialogs. The dialogs are served from a different host, so the script has to run
+            in those frames as well as the main page.</span>
         </li>
         <li>
           <span class="steps__n">4</span>
@@ -102,10 +104,15 @@
     <section class="panel arb-panel" aria-labelledby="limits-title">
       <div class="panel__head"><h2 id="limits-title">Known limits</h2></div>
       <ul class="arb-list">
-        <li>The script drives element IDs on the vendor's page. A portal update can rename them, and
-          the run stops with the ID it could not find. They are all in the
+        <li>The script drives element IDs on the vendor's pages. A portal update can rename them,
+          and the run stops with the ID it could not find. They are all in the
           <span class="arb-code">SEL</span> block at the top of the file, so a rename is a one-line
           fix.</li>
+        <li>The two dialogs are served from a different host than the project list, so the script
+          runs in three documents that coordinate by message passing. If a run stalls at "Timed out
+          waiting for the select dialog", the usual cause is the userscript manager not having
+          permission to run in frames, or the dialog host differing from the one in the match line.
+          The dialog's address bar host is what that line needs to cover.</li>
         <li>A unit that fails is logged and skipped rather than stopping the run, so one bad report
           does not cost you the rest of the list. The count above the buttons shows how many saved
           and how many failed.</li>

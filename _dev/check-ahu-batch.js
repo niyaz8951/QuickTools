@@ -125,11 +125,25 @@ check('parses as JS', (() => {
 })());
 check('metadata block present', /==UserScript==[\s\S]*==\/UserScript==/.test(userJs));
 
-const match = userJs.match(/@match\s+(\S+)/g) || [];
-check('exactly one @match', match.length === 1, match.join(' '));
-check('@match is scoped to the vendor portal',
-  match.length === 1 && /tools\.daikinapplied\.eu/.test(match[0]), match.join(' '));
+// The dialogs load from a different host (tools4), so the script must run in
+// those frames too — but every @match still has to stay inside the vendor's
+// domain, and none may widen to all sites.
+const match = [...userJs.matchAll(/@match\s+(\S+)/g)].map((m) => m[1]);
+check('has @match rules', match.length > 0);
+check('every @match stays on daikinapplied.eu',
+  match.every((m) => /^https:\/\/[^/]*daikinapplied\.eu\//.test(m)), match.join(' '));
+check('covers the project list',
+  match.some((m) => /ManageProjects/.test(m)), match.join(' '));
+check('covers the report dialogs',
+  match.some((m) => /\/Report\//.test(m)), match.join(' '));
 check('no wildcard host match', !/@match\s+\S*:\/\/\*\/|@include/.test(userJs));
+
+// Cross-frame messages must be origin-checked in both directions, or any page
+// could drive the frames.
+check('validates message origin', /ORIGIN_OK\.test\(event\.origin\)/.test(userJs));
+check('origin pattern is anchored', /\^https:\\\/\\\/\[a-z0-9-\]\+\\\.daikinapplied\\\.eu\$/.test(userJs));
+check('replies target a specific origin, not "*"',
+  !/postMessage\([^)]*\btype: 'select-done'[^)]*'\*'\)/.test(userJs));
 check('@grant none', /@grant\s+none/.test(userJs));
 
 // The script must not reach back to Thinkneering at runtime — it runs on a
