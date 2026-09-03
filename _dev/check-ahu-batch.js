@@ -154,6 +154,16 @@ check('no outbound calls to thinkneering', !/thinkneering\.com\/\S/.test(
 // Selectors live in one block so a portal rename is a single-file fix.
 check('selectors collected in SEL', /const SEL = \{[\s\S]*?\};/.test(userJs));
 
+// The export format is the one step whose failure is invisible — a PDF
+// downloads perfectly happily and only looks wrong later. So the format must
+// never be set by writing the combo's display input, and must be read back.
+check('does not set the format by writing the display input',
+  !/formatCombo\)[\s\S]{0,200}\.value\s*=\s*'RTF'/.test(userJs),
+  'writing _I only repaints the combo; the value stays PDF');
+check('uses the combo client API', /GetControlCollection\(\)/.test(userJs));
+check('falls back to the dropdown', /_DDD_L_LBI/.test(userJs));
+check('verifies the format took', /Could not switch the export format/.test(userJs));
+
 console.log(
   failures === 0
     ? '\nAll checks passed.\n'

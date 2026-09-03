@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thinkneering — Daikin AHU Batch Report Export
 // @namespace    https://thinkneering.com/
-// @version      2.0.0
+// @version      2.1.0
 // @description  Work through a Daikin project's unit list, saving every unit report as RTF.
 // @author       Thinkneering
 // @match        https://tools.daikinapplied.eu/ManageProjects/*
@@ -75,6 +75,9 @@
     element: 30000,
     frame: 45000, // report generation is server-side and can be slow
     settle: 400,
+    // The combo posts its change back to the server; the save must not fire
+    // before that has registered or the export runs with the old format.
+    format: 1200,
     download: 2500, // breathing room for the browser to start saving
   };
 
@@ -375,26 +378,129 @@
     announce('select', isDone);
   }
 
+  /* Setting the export format.
+
+     The _I input is only the combo's display text. Writing "RTF" into it and
+     firing change repaints the box but leaves the control's actual value at
+     PDF, so the report still exports as PDF while the toolbar reads RTF. The
+     value the server uses lives in the _VI hidden field and in the client
+     object's own state, and neither follows a write to _I.
+
+     So: ask the DevExpress client object to select the item, and if that is not
+     reachable, open the dropdown and click the option the way a person would.
+     Either way the result is read back before continuing — this is the one step
+     whose failure is otherwise invisible, since a PDF downloads perfectly
+     happily and only looks wrong later. */
+
+  function comboApi(base) {
+    try {
+      if (window.ASPx && typeof window.ASPx.GetControlCollection === 'function') {
+        const found = window.ASPx.GetControlCollection().Get(base);
+        if (found) return found;
+      }
+    } catch (err) {
+      /* control collection not published on this page */
+    }
+    return window[base] || null;
+  }
+
+  async function setExportFormat(format) {
+    const input = await waitFor(SEL.formatCombo, { timeout: TIMEOUT.frame });
+    const base = input.id.replace(/_I$/, '');
+    const hidden = document.getElementById(`${base}_VI`);
+
+    // Prefer the control's own value over the display text, which is exactly
+    // the distinction the old code missed.
+    const current = () => {
+      const api = comboApi(base);
+      if (api && typeof api.GetValue === 'function') {
+        try {
+          const value = api.GetValue();
+          if (value != null && value !== '') return String(value).toUpperCase();
+        } catch (err) {
+          /* fall through to the hidden field */
+        }
+      }
+      if (hidden && hidden.value) return String(hidden.value).toUpperCase();
+      return String(input.value || '').toUpperCase();
+    };
+
+    if (current() === format) return `already ${format}`;
+
+    // 1. The client object, which updates the hidden field and raises the
+    //    control's own change events.
+    const api = comboApi(base);
+    if (api) {
+      try {
+        let picked = false;
+        if (typeof api.GetItemCount === 'function' && typeof api.SetSelectedIndex === 'function') {
+          for (let i = 0; i < api.GetItemCount(); i++) {
+            const item = api.GetItem(i);
+            const text = String((item && (item.text != null ? item.text : item.value)) || '');
+            if (text.trim().toUpperCase() === format) {
+              api.SetSelectedIndex(i);
+              picked = true;
+              break;
+            }
+          }
+        }
+        if (!picked && typeof api.SetValue === 'function') api.SetValue(format);
+
+        await sleep(TIMEOUT.format);
+        if (current() === format) return `${format} set via the combo API`;
+      } catch (err) {
+        /* fall through to driving the dropdown */
+      }
+    }
+
+    // 2. Open the list and click the option.
+    const button =
+      document.getElementById(`${base}_B-1`) ||
+      document.querySelector(`[id^="${base}_B"]`);
+
+    if (button) {
+      await press(button, 'Format dropdown');
+
+      try {
+        await waitFor(`[id^="${base}_DDD_L"]`, { timeout: 5000 });
+      } catch (err) {
+        throw new Error('Format dropdown did not open');
+      }
+      await sleep(TIMEOUT.settle);
+
+      // Each option renders as both a row and a cell, and the handler may sit
+      // on either. Verifying after each attempt is what distinguishes them —
+      // clicking the wrong one throws nothing and changes nothing.
+      const options = document.querySelectorAll(`[id^="${base}_DDD_L_LBI"]`);
+      for (const option of options) {
+        if ((option.textContent || '').trim().toUpperCase() !== format) continue;
+        try {
+          await press(option, `Format option ${format}`);
+        } catch (err) {
+          continue;
+        }
+        await sleep(TIMEOUT.format);
+        if (current() === format) return `${format} chosen from the dropdown`;
+      }
+    }
+
+    throw new Error(
+      `Could not switch the export format to ${format} — it is still ${current() || 'unknown'}`
+    );
+  }
+
   // ReportAHU.aspx — switch the export format to RTF, then save.
   function runReportAgent() {
     const isDone = commandListener('do-save', async () => {
       await waitFor(SEL.reportCanvas, { timeout: TIMEOUT.frame });
 
-      const combo = document.querySelector(SEL.formatCombo);
-      if (combo) {
-        combo.value = 'RTF';
-        // The DevExpress combo keeps its real value in a sibling hidden input.
-        const hidden = document.getElementById(`${combo.id.slice(0, -2)}_VI`);
-        if (hidden) hidden.value = 'RTF';
-        combo.dispatchEvent(new Event('change', { bubbles: true }));
-        await sleep(TIMEOUT.settle);
-      }
+      const format = await setExportFormat('RTF');
 
       const save = await waitFor(SEL.saveButton, { timeout: TIMEOUT.frame });
       await press(save, 'Save button');
       await sleep(TIMEOUT.download);
 
-      return { type: 'save-done', format: combo ? combo.value : 'unchanged' };
+      return { type: 'save-done', format };
     });
 
     announce('report', isDone);
