@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thinkneering — Daikin AHU Batch Report Export
 // @namespace    https://thinkneering.com/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Work through a Daikin project's unit list, saving every unit report as RTF.
 // @author       Thinkneering
 // @match        https://tools.daikinapplied.eu/ManageProjects/*
@@ -188,11 +188,16 @@
     throw new Error(`${label}: click had no effect${lastError ? ` (${lastError.message})` : ''}`);
   }
 
-  /* Where the result of a click is observable — a checkbox flipping, a detail
-     row opening — clicking blindly is not good enough. This escalates through
-     the strategies and checks after each whether the page actually changed, so
-     a strategy that throws nothing but does nothing is still caught. */
-  async function pressUntil(el, done, label, settleMs = 4000) {
+  /* Where the result of a click is observable — a detail row opening — clicking
+     blindly is not good enough. This escalates through the strategies and
+     checks after each whether the page actually changed.
+
+     maxStrategies exists because escalation is dangerous on anything that
+     toggles: strategy 2 undoes strategy 1, and the control ends up wherever the
+     last attempt left it. Callers driving a toggle cap this low. Anything that
+     genuinely toggles per click, like a checkbox, should not use this at all —
+     see tickRow. */
+  async function pressUntil(el, done, label, { settleMs = 4000, maxStrategies = 4 } = {}) {
     if (!el) throw new Error(`${label}: element not present`);
     if (done()) return true;
 
@@ -200,7 +205,7 @@
     await sleep(150);
 
     const tried = [];
-    for (const strategy of clickStrategies(el)) {
+    for (const strategy of clickStrategies(el).slice(0, maxStrategies)) {
       try {
         strategy.run();
       } catch (err) {
@@ -255,26 +260,69 @@
       throw new Error('No project row found to expand — open a project list before starting');
     }
 
-    await pressUntil(toggle, () => isProjectExpanded(doc), 'Project expand arrow');
+    // Two strategies only: the arrow toggles, so a third attempt would collapse
+    // the row it just opened.
+    await pressUntil(toggle, () => isProjectExpanded(doc), 'Project expand arrow', {
+      maxStrategies: 2,
+    });
 
     // The units grid arrives with the detail row, over a separate callback.
     await waitFor(`#${SEL.unitSelectButton(0)}`, { root: doc });
     return 'expanded';
   }
 
-  // The inner input holds "C" or "U"; the display span mirrors it in its class
-  // name. Checking both means a markup change to one does not blind the check.
-  function isRowSelected(doc, index) {
-    const input = doc.getElementById(SEL.unitSelectInput(index));
-    if (input && input.value) return input.value.toUpperCase() === 'C';
+  /* Reading the tick state.
 
+     The span's class is the reliable signal, because it is what the page
+     actually renders. The inner input's value is checked only as a fallback:
+     on the grid's selection checkbox it can sit at "U" even once the row is
+     ticked, and an earlier version read it first and so believed every tick
+     had failed.
+
+     "Unchecked" is tested before "Checked" — the two class names differ by one
+     letter and testing in the wrong order is an easy way to misread the state.
+
+     Returns true, false, or null where neither signal is conclusive. Null
+     matters: it means "cannot tell", which is not the same as "not ticked",
+     and the caller must not act as though a tick failed just because it could
+     not be confirmed. */
+  function rowSelectionState(doc, index) {
     const span = doc.getElementById(SEL.unitSelectButton(index));
-    if (!span) return false;
-    return /CheckBoxChecked/i.test(span.className);
+    if (span) {
+      if (/CheckBoxUnchecked/i.test(span.className)) return false;
+      if (/CheckBoxChecked/i.test(span.className)) return true;
+    }
+
+    const input = doc.getElementById(SEL.unitSelectInput(index));
+    const value = input && input.value ? input.value.toUpperCase() : '';
+    if (value === 'C') return true;
+    if (value === 'U') return false;
+
+    return null;
   }
 
-  async function ensureRowSelected(doc, index, label) {
-    if (isRowSelected(doc, index)) return 'already ticked';
+  function isRowSelected(doc, index) {
+    return rowSelectionState(doc, index) === true;
+  }
+
+  /* Ticking a row is best-effort, and deliberately gets exactly one attempt.
+
+     A checkbox is a toggle, so the escalate-and-recheck approach used elsewhere
+     is actively wrong here: each strategy undoes the one before it, leaving
+     boxes flickering on and off and landing on whichever state the last attempt
+     produced. Nor does it fall back to an ancestor — the row element under the
+     checkbox carries its own selection handler, so a stray dispatch there can
+     tick a different row than the one asked for.
+
+     It also never throws. The portal opens the report from the button that was
+     clicked, not from the selection, so a tick that does not register is worth
+     noting and moving past rather than losing the unit over. */
+  async function tickRow(doc, index) {
+    const before = rowSelectionState(doc, index);
+    if (before === true) return 'already ticked';
+
+    const box = doc.getElementById(SEL.unitSelectButton(index));
+    if (!box) return 'no checkbox found';
 
     // The grid's own client API is cleaner than synthesising a click, where
     // DevExpress has published the object under the grid's name.
@@ -282,19 +330,27 @@
     if (grid && typeof grid.SelectRow === 'function') {
       try {
         grid.SelectRow(index, true);
-        const deadline = Date.now() + 3000;
-        while (Date.now() < deadline) {
-          await sleep(200);
-          if (isRowSelected(doc, index)) return 'ticked via grid API';
-        }
+        await sleep(TIMEOUT.settle);
+        if (rowSelectionState(doc, index) === true) return 'ticked';
       } catch (err) {
-        /* fall through to clicking the checkbox */
+        /* fall through to a single click on the checkbox itself */
       }
     }
 
-    const box = doc.getElementById(SEL.unitSelectButton(index));
-    await pressUntil(box, () => isRowSelected(doc, index), label);
-    return 'ticked';
+    box.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
+    await sleep(150);
+
+    try {
+      mouseSequence(box);
+    } catch (err) {
+      return `tick attempt failed (${err.message})`;
+    }
+
+    await sleep(TIMEOUT.settle);
+    const after = rowSelectionState(doc, index);
+    if (after === true) return 'ticked';
+    if (after === null) return 'tick state unknown';
+    return 'tick did not register';
   }
 
   /* --------------------------------------------------------------- runner */
@@ -309,11 +365,12 @@
       // An absent report button means the grid has run out of rows.
       if (!doc.getElementById(reportId)) return { done: true };
 
-      // Tick this unit's box first. The portal ties the report to the selected
-      // row, so skipping this can produce the wrong unit's report rather than
-      // an obvious failure.
-      const how = await ensureRowSelected(doc, index, `Unit ${index + 1} checkbox`);
-      if (how !== 'already ticked') UI.log(`  ${how}`, 'muted');
+      // Scroll the row into view first, then tick it. The working Python script
+      // only ever scrolled here — its checkbox click was commented out — and the
+      // report opened from the report button regardless. So the tick is done on
+      // a best-effort basis and its outcome never blocks the export.
+      const how = await tickRow(doc, index);
+      if (how !== 'already ticked') UI.log(`  ${how}`, how === 'ticked' ? 'muted' : 'warning');
 
       await pressById(doc, reportId, `Unit ${index + 1} report button`);
 
@@ -634,7 +691,7 @@
 
   /* Exposed for console debugging when a step stalls. From the Daikin page:
        TNAHU.expand()        - expand the first project row
-       TNAHU.selected(0)     - is unit 1 ticked?
+       TNAHU.selected(0)     - unit 1 tick state (true / false / null)
        TNAHU.tick(0)         - tick it, verified
        TNAHU.try('SomeId')   - report what is found, then try to click it
        TNAHU.selectors       - the ids the run depends on                    */
@@ -642,8 +699,8 @@
     selectors: SEL,
     press: press,
     expand: () => ensureProjectExpanded(document),
-    selected: (i) => isRowSelected(document, i),
-    tick: (i) => ensureRowSelected(document, i, `Unit ${i + 1} checkbox`),
+    selected: (i) => rowSelectionState(document, i),
+    tick: (i) => tickRow(document, i),
     async try(id, doc) {
       const target = (doc || document).getElementById(id);
       if (!target) {
