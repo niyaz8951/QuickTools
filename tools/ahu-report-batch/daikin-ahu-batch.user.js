@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thinkneering — Daikin AHU Batch Report Export
 // @namespace    https://thinkneering.com/
-// @version      0.1.0
+// @version      0.2.0
 // @description  Batch-export AHU unit reports as RTF from the Daikin Applied project tool, with optional zip packaging.
 // @author       Thinkneering
 // @match        https://tools.daikinapplied.eu/ManageProjects/*
@@ -88,35 +88,115 @@
     throw new Error('Dialog frame never finished loading');
   }
 
+  /* DevExpress controls bind to mousedown/mouseup on a wrapper element, not to
+     the synthetic event `.click()` fires, and the node carrying the id is often
+     a decorative inner span with no handler of its own. So a click is attempted
+     four ways, in order of how faithfully they imitate a real mouse:
+       1. full pointer + mouse sequence on the element
+       2. the same sequence on its nearest handler-bearing ancestor
+       3. plain .click()
+       4. the element's own onclick, invoked directly
+     Most steps succeed at 1; the checkbox spans in the options dialog usually
+     need 2. */
+
+  function isVisible(el) {
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function mouseSequence(el) {
+    const win = el.ownerDocument.defaultView;
+    const rect = el.getBoundingClientRect();
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      view: win,
+      button: 0,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    };
+
+    const steps = [
+      ['pointerover', 'PointerEvent'],
+      ['mouseover', 'MouseEvent'],
+      ['pointerdown', 'PointerEvent'],
+      ['mousedown', 'MouseEvent'],
+      ['pointerup', 'PointerEvent'],
+      ['mouseup', 'MouseEvent'],
+      ['click', 'MouseEvent'],
+    ];
+
+    for (const [type, ctorName] of steps) {
+      const Ctor = win[ctorName] || win.MouseEvent;
+      try {
+        el.dispatchEvent(new Ctor(type, options));
+      } catch (err) {
+        /* older frames may not expose PointerEvent; the mouse pair covers it */
+      }
+    }
+  }
+
+  // Walks up from a decorative span to whatever actually carries the handler.
+  function handlerTarget(el) {
+    let node = el;
+    for (let depth = 0; node && depth < 4; depth++) {
+      if (node.onclick || node.onmousedown || node.getAttribute?.('onclick')) return node;
+      if (node.tagName === 'A' || node.tagName === 'BUTTON') return node;
+      node = node.parentElement;
+    }
+    return el.parentElement || el;
+  }
+
+  async function press(el, label) {
+    if (!el) throw new Error(`${label}: element not present`);
+
+    el.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
+    await sleep(150);
+
+    const strategies = [
+      () => mouseSequence(el),
+      () => mouseSequence(handlerTarget(el)),
+      () => el.click(),
+      () => {
+        const target = handlerTarget(el);
+        if (target.onclick) target.onclick.call(target);
+        else throw new Error('no onclick to invoke');
+      },
+    ];
+
+    let lastError = null;
+    for (const attempt of strategies) {
+      try {
+        attempt();
+        return true;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    throw new Error(`${label}: click had no effect${lastError ? ` (${lastError.message})` : ''}`);
+  }
+
   // ASPxGridView rebinds rows during scroll, which detaches the node we are
-  // holding. Re-resolving by id on each attempt survives that.
-  async function clickById(doc, id, attempts = 40) {
+  // holding, so the id is re-resolved on every attempt rather than cached.
+  async function pressById(doc, id, label, attempts = 30) {
+    let lastError = null;
     for (let n = 0; n < attempts; n++) {
       const el = doc.getElementById(id);
-      if (el) {
+      if (el && isVisible(el)) {
         try {
-          el.click();
-          return true;
+          return await press(el, label);
         } catch (err) {
-          /* node went stale mid-click; fall through and retry */
+          lastError = err;
         }
       }
       await sleep(250);
     }
-    throw new Error(`Could not click #${id}`);
+    throw new Error(
+      lastError ? lastError.message : `${label}: #${id} never became clickable`
+    );
   }
 
-  async function clickEl(el, attempts = 20) {
-    for (let n = 0; n < attempts; n++) {
-      try {
-        el.click();
-        return true;
-      } catch (err) {
-        await sleep(200);
-      }
-    }
-    throw new Error('Element refused to accept a click');
-  }
 
   /* ------------------------------------------------------------------ zip */
 
@@ -411,7 +491,7 @@
         await sleep(TIMEOUT.settle);
       }
 
-      await clickById(doc, reportId);
+      await pressById(doc, reportId, `Unit ${index + 1} report button`);
 
       // 1. Options dialog — pick which sections the report includes.
       const optionsFrame = await waitFor(`${SEL.optionsDialog} iframe`);
@@ -419,17 +499,17 @@
 
       if (options.fanCurve) {
         const fanCurve = await waitFor(SEL.optFanCurve, { root: optionsDoc });
-        await clickEl(fanCurve);
+        await press(fanCurve, 'Fan curve checkbox');
         await sleep(TIMEOUT.settle);
       }
       if (options.listPrice) {
         const listPrice = await waitFor(SEL.optListPrice, { root: optionsDoc });
-        await clickEl(listPrice);
+        await press(listPrice, 'List price checkbox');
         await sleep(TIMEOUT.settle);
       }
 
       const generate = await waitFor(SEL.generateButton);
-      await clickEl(generate);
+      await press(generate, 'Generate report button');
 
       // 2. Report viewer — switch the export format before saving.
       const reportFrame = await waitFor(`${SEL.reportDialog} iframe`);
@@ -451,7 +531,7 @@
       if (options.mode === 'zip') Capture.arm();
 
       const save = await waitFor(SEL.saveButton, { root: reportDoc });
-      await clickEl(save);
+      await press(save, 'Save button');
 
       let file = null;
       if (options.mode === 'zip') {
@@ -465,7 +545,7 @@
       const closeBar = document.querySelector(SEL.dialogCloseBar);
       if (closeBar) {
         const button = closeBar.querySelector('button');
-        if (button) await clickEl(button);
+        if (button) await press(button, 'Dialog close button');
       }
       await sleep(TIMEOUT.settle);
 
@@ -777,6 +857,36 @@
 
     progress(done, total) {
       if (this.progressEl) this.progressEl.style.width = `${Math.round((done / total) * 100)}%`;
+    },
+  };
+
+  /* Exposed for console debugging when a step stalls. From the Daikin page:
+       TNAHU.try('SomeElementId')   - report what is found, then try to click it
+       TNAHU.selectors              - the ids the run depends on            */
+  window.TNAHU = {
+    selectors: SEL,
+    press: press,
+    async try(id, doc) {
+      const target = (doc || document).getElementById(id);
+      if (!target) {
+        console.log(`#${id} not found in this document — check you are in the right frame.`);
+        return false;
+      }
+      console.log(`#${id}`, {
+        tag: target.tagName,
+        className: target.className,
+        visible: isVisible(target),
+        rect: target.getBoundingClientRect(),
+        handlerTarget: handlerTarget(target),
+      });
+      try {
+        await press(target, id);
+        console.log('click dispatched — check whether the page reacted');
+        return true;
+      } catch (err) {
+        console.log('click failed:', err.message);
+        return false;
+      }
     },
   };
 
