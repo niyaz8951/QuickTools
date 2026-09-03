@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Tied to a vendor portal login rather than being usable on its own, so it
+       stays out of search results even though the file sits in a public repo. -->
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/global.css">
+  <link rel="stylesheet" href="styles.css">
+  <title>AHU Batch Report Export — Thinkneering</title>
+  <meta name="description" content="Export AHU unit reports in bulk from the Daikin Applied project tool, as RTF files or a single zip. Runs in your own browser session.">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header data-site-header></header>
+
+  <main id="main" class="wrap">
+    <div class="page-head">
+      <p class="eyebrow">Tools</p>
+      <h1>AHU Batch Report Export</h1>
+      <p class="page-head__lede">Work through a whole unit list instead of clicking each report</p>
+      <p>A userscript for the Daikin Applied project tool. It opens each unit's report, sets the
+         format to RTF and saves it, then moves to the next one — either as separate downloads or
+         as a single zip at the end. It runs inside the session you are already logged into, so
+         your portal password stays between you and Daikin.</p>
+    </div>
+
+    <div class="notice arb-notice">
+      <span data-icon="file-check" class="arb-notice__icon"></span>
+      <div>
+        <p><strong>This one is not like the other tools here.</strong></p>
+        <p class="hint">Everything else on Thinkneering runs on this page with nothing to install.
+           This is a script you install into your browser, and it only does anything on
+           <span class="arb-code">tools.daikinapplied.eu</span>. You need your own portal account —
+           it does not provide access to anything.</p>
+      </div>
+    </div>
+
+    <section class="panel arb-panel" aria-labelledby="install-title">
+      <div class="panel__head"><h2 id="install-title">Install</h2></div>
+      <ol class="steps">
+        <li>
+          <span class="steps__n">1</span>
+          <span class="steps__t">Add a userscript manager</span>
+          <span class="steps__d">Tampermonkey or Violentmonkey, from your browser's extension store.
+            Either one works.</span>
+        </li>
+        <li>
+          <span class="steps__n">2</span>
+          <span class="steps__t">Open the script</span>
+          <span class="steps__d">Use the install button below. The manager recognises a
+            <span class="arb-code">.user.js</span> file and offers to install it.</span>
+        </li>
+        <li>
+          <span class="steps__n">3</span>
+          <span class="steps__t">Check the match line</span>
+          <span class="steps__d">Confirm it reads <span class="arb-code">tools.daikinapplied.eu</span>
+            before you accept. That is the only domain the script runs on.</span>
+        </li>
+        <li>
+          <span class="steps__n">4</span>
+          <span class="steps__t">Log in as usual</span>
+          <span class="steps__d">Open a project and expand the unit grid. A panel appears in the top
+            right of the page.</span>
+        </li>
+      </ol>
+    </section>
+
+    <section class="panel arb-panel" aria-labelledby="use-title">
+      <div class="panel__head"><h2 id="use-title">Using it</h2></div>
+      <p>Expand the unit grid first, so the rows the script needs are on the page. Then set where to
+         start and how many units to work through, tick which sections the report should include,
+         and start it.</p>
+      <ul class="arb-list">
+        <li><strong>One zip at the end</strong> — holds each report in memory and saves a single
+          archive. Tidier, but it depends on catching the download in flight.</li>
+        <li><strong>Download each file</strong> — lets the browser save reports normally, one per
+          unit. Messier, but it cannot fail for interception reasons.</li>
+        <li><strong>Stop</strong> — finishes the unit in progress, then halts. In zip mode you still
+          get an archive of whatever was collected up to that point.</li>
+      </ul>
+    </section>
+
+    <section class="panel arb-panel" aria-labelledby="source-title">
+      <div class="panel__head"><h2 id="source-title">The script</h2></div>
+      <div class="toolbar" role="group" aria-label="Script">
+        <a class="btn btn--primary" href="daikin-ahu-batch.user.js" id="btn-install">Install script</a>
+        <button type="button" class="btn btn--ghost" id="btn-copy">Copy source</button>
+      </div>
+      <p class="hint">Worth a read before installing — it is the whole tool, and the element IDs it
+         depends on are collected at the top.</p>
+      <pre class="arb-source" id="source" tabindex="0"><code>Loading source…</code></pre>
+      <p class="hint" id="status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="panel arb-panel" aria-labelledby="limits-title">
+      <div class="panel__head"><h2 id="limits-title">Known limits</h2></div>
+      <ul class="arb-list">
+        <li>The script drives element IDs on the vendor's page. A portal update can rename them, and
+          the run stops with the ID it could not find. They are all in the
+          <span class="arb-code">SEL</span> block at the top of the file, so a rename is a one-line
+          fix.</li>
+        <li>Zip mode captures the report by intercepting the request the viewer makes. If the viewer
+          changes how it hands over files, the log says nothing was captured. The
+          <strong>Diagnose</strong> button records what the Save button actually does, so the route
+          can be re-identified rather than guessed at.</li>
+        <li>Reports are generated by the portal, one at a time. A long run takes about as long as it
+          would by hand — it just does not need anyone watching it.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer data-site-footer></footer>
+  <script src="../../assets/js/global.js"></script>
+  <script>
+  (function () {
+    'use strict';
+
+    /* The script is shown inline so it can be read before installing, and copied
+       where a userscript manager will not take a direct link. */
+    var source = TN.el('#source');
+    var status = TN.el('#status');
+    var text = '';
+
+    fetch('daikin-ahu-batch.user.js')
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.text();
+      })
+      .then(function (body) {
+        text = body;
+        var code = document.createElement('code');
+        code.textContent = body;
+        source.textContent = '';
+        source.appendChild(code);
+      })
+      .catch(function (err) {
+        source.textContent = 'Could not load the source (' + err.message +
+          '). Use the install button instead.';
+      });
+
+    TN.el('#btn-copy').addEventListener('click', function () {
+      if (!text) { status.textContent = 'Source has not loaded yet.'; return; }
+      navigator.clipboard.writeText(text).then(
+        function () { TN.toast('Source copied', 'success'); },
+        function () { status.textContent = 'Copy blocked by the browser — select the text instead.'; }
+      );
+    });
+
+    /* Icons are registry keys, resolved once the chrome is up. */
+    document.addEventListener('tn:ready', function () {
+      TN.els('[data-icon]').forEach(function (node) {
+        node.innerHTML = TN.icon(node.getAttribute('data-icon'), 20);
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+/* AHU Batch Report Export — page-specific styles.
+   Layout, panels, buttons, steps and the notice all come from global.css.
+   What is left here is the source listing and a few inline bits that have no
+   global equivalent. Tokens only; no raw values. */
+
+.arb-panel { margin-bottom: var(--space-4); }
+
+.arb-notice { margin-bottom: var(--space-4); }
+.arb-notice p { margin: 0; }
+.arb-notice p + p { margin-top: var(--space-1); }
+
+/* The notice component lays its children out in a row, so the icon needs to
+   stop itself being squeezed by the text block beside it. */
+.arb-notice__icon {
+  flex: none;
+  display: inline-flex;
+  color: var(--color-primary);
+}
+
+/* Inline literal — file names, element IDs, domains. Matches the treatment
+   .tc-code gives the same job in Text Cleaner. */
+.arb-code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
+
+.arb-list {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+}
+
+.arb-list strong { color: var(--color-text); font-weight: 500; }
+
+/* Capped so a 700-line script does not push the rest of the page out of reach.
+   Scrolls on its own, and is focusable so the keyboard can reach the scroll. */
+.arb-source {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  max-height: 420px;
+  overflow: auto;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  white-space: pre;
+  tab-size: 2;
+}
+
+@media (max-width: 560px) {
+  .arb-source { font-size: 0.75rem; max-height: 280px; }
+}

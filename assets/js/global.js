@@ -84,7 +84,8 @@
     { href: 'tools/container-calculator/', title: 'Container Calculator' },
     { href: 'tools/centre-of-gravity/', title: 'Centre of Gravity' },
     { href: 'tools/parts-extractor/', title: 'Parts List Extractor' },
-    { href: 'tools/text-cleaner/', title: 'Text Cleaner' }
+    { href: 'tools/text-cleaner/', title: 'Text Cleaner' },
+    { href: 'tools/ahu-report-batch/', title: 'AHU Batch Report Export' }
   ];
 
   function headerHTML() {
