@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thinkneering — Daikin AHU Batch Report Export
 // @namespace    https://thinkneering.com/
-// @version      0.2.0
-// @description  Batch-export AHU unit reports as RTF from the Daikin Applied project tool, with optional zip packaging.
+// @version      1.0.0
+// @description  Work through a Daikin project's unit list, saving every unit report as RTF.
 // @author       Thinkneering
 // @match        https://tools.daikinapplied.eu/ManageProjects/*
 // @run-at       document-idle
@@ -10,27 +10,33 @@
 // ==/UserScript==
 
 /*
- * Runs inside the Daikin page, so every request is same-origin and reuses the
- * session the user already logged into. No credentials are read, stored or sent
- * anywhere by this script.
+ * Runs inside the Daikin page, reusing the session already logged in. It reads
+ * no credentials and sends nothing anywhere — every request it causes is one
+ * the portal would have made had you clicked through by hand.
  *
- * Two delivery modes:
- *   "zip"  - intercept each generated RTF, hold it in memory, emit one archive.
- *   "each" - do not intercept; let the browser download each file natively.
- *
- * Zip mode depends on how the DevExpress viewer emits the file. If interception
- * comes up empty, the run reports it and you can fall back to "each". The
- * Diagnose button records what the Save button actually does so the selectors
- * below can be corrected without guesswork.
+ * Each report is saved by the browser as it is produced. The run starts at the
+ * unit you choose and carries on until the grid has no more rows.
  */
 
 (function () {
   'use strict';
 
-  // Element IDs are taken from the live portal. They are the most likely thing
-  // to break after a vendor update, so they live in one place.
+  // Element ids taken from the live portal. The most likely thing to break
+  // after a vendor update, so they live in one place.
   const SEL = {
+    // The page is a master-detail grid: MainContent_GridProject holds projects,
+    // and each project's detail row contains the GridUnit units grid. Nothing
+    // with a GridUnit id exists until the project row is expanded.
+    projectGrid: 'MainContent_GridProject',
+    detailCollapsed: 'img.dxGridView_gvDetailCollapsedButton_Metropolis',
+    detailExpanded: 'img.dxGridView_gvDetailExpandedButton_Metropolis',
+
+    // Selection checkbox. The id sits on the outer display span; the inner
+    // input carries the state as "C" or "U", and the span's class switches
+    // between ...CheckBoxChecked... and ...CheckBoxUnchecked....
     unitSelectButton: (i) => `GridUnit_DXSelBtn${i}_D`,
+    unitSelectInput: (i) => `GridUnit_DXSelBtn${i}`,
+
     unitReportButton: (i) => `GridUnit_DXCBtn${6 * i + 1}Img`,
     optionsDialog: '#Select-dialog',
     optFanCurve: '#ASPxFormLayout1_ChkFanCurve_S_D',
@@ -45,9 +51,13 @@
 
   const TIMEOUT = {
     element: 30000,
-    download: 45000,
     settle: 400,
+    download: 2000, // breathing room for the browser to start saving
   };
+
+  // The loop ends when the grid runs out of rows. This only stops a runaway if
+  // something upstream goes wrong.
+  const MAX_UNITS = 2000;
 
   /* ---------------------------------------------------------------- utils */
 
@@ -76,8 +86,8 @@
     });
   }
 
-  // Dialog iframes are created before their document is parsed, so waiting for
-  // the iframe element alone is not enough.
+  // Dialog iframes exist before their document is parsed, so waiting for the
+  // iframe element alone is not enough.
   async function frameDocument(iframe, timeout = TIMEOUT.element) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
@@ -88,16 +98,12 @@
     throw new Error('Dialog frame never finished loading');
   }
 
-  /* DevExpress controls bind to mousedown/mouseup on a wrapper element, not to
-     the synthetic event `.click()` fires, and the node carrying the id is often
-     a decorative inner span with no handler of its own. So a click is attempted
-     four ways, in order of how faithfully they imitate a real mouse:
-       1. full pointer + mouse sequence on the element
-       2. the same sequence on its nearest handler-bearing ancestor
-       3. plain .click()
-       4. the element's own onclick, invoked directly
-     Most steps succeed at 1; the checkbox spans in the options dialog usually
-     need 2. */
+  /* --------------------------------------------------------------- clicks */
+
+  /* DevExpress binds to mousedown/mouseup, not to the synthetic event
+     `.click()` fires, and the node carrying the id is often a decorative inner
+     span with no handler of its own. So a click is attempted four ways, in
+     order of how faithfully each imitates a real mouse. */
 
   function isVisible(el) {
     const rect = el.getBoundingClientRect();
@@ -147,27 +153,32 @@
     return el.parentElement || el;
   }
 
+  function clickStrategies(el) {
+    return [
+      { name: 'mouse sequence', run: () => mouseSequence(el) },
+      { name: 'ancestor mouse sequence', run: () => mouseSequence(handlerTarget(el)) },
+      { name: 'native click', run: () => el.click() },
+      {
+        name: 'inline onclick',
+        run: () => {
+          const target = handlerTarget(el);
+          if (target.onclick) target.onclick.call(target);
+          else throw new Error('no onclick to invoke');
+        },
+      },
+    ];
+  }
+
   async function press(el, label) {
     if (!el) throw new Error(`${label}: element not present`);
 
     el.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
     await sleep(150);
 
-    const strategies = [
-      () => mouseSequence(el),
-      () => mouseSequence(handlerTarget(el)),
-      () => el.click(),
-      () => {
-        const target = handlerTarget(el);
-        if (target.onclick) target.onclick.call(target);
-        else throw new Error('no onclick to invoke');
-      },
-    ];
-
     let lastError = null;
-    for (const attempt of strategies) {
+    for (const strategy of clickStrategies(el)) {
       try {
-        attempt();
+        strategy.run();
         return true;
       } catch (err) {
         lastError = err;
@@ -177,8 +188,40 @@
     throw new Error(`${label}: click had no effect${lastError ? ` (${lastError.message})` : ''}`);
   }
 
-  // ASPxGridView rebinds rows during scroll, which detaches the node we are
-  // holding, so the id is re-resolved on every attempt rather than cached.
+  /* Where the result of a click is observable — a checkbox flipping, a detail
+     row opening — clicking blindly is not good enough. This escalates through
+     the strategies and checks after each whether the page actually changed, so
+     a strategy that throws nothing but does nothing is still caught. */
+  async function pressUntil(el, done, label, settleMs = 4000) {
+    if (!el) throw new Error(`${label}: element not present`);
+    if (done()) return true;
+
+    el.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
+    await sleep(150);
+
+    const tried = [];
+    for (const strategy of clickStrategies(el)) {
+      try {
+        strategy.run();
+      } catch (err) {
+        tried.push(`${strategy.name} (threw)`);
+        continue;
+      }
+      tried.push(strategy.name);
+
+      // DevExpress answers over a callback, so the change is not immediate.
+      const deadline = Date.now() + settleMs;
+      while (Date.now() < deadline) {
+        await sleep(200);
+        if (done()) return true;
+      }
+    }
+
+    throw new Error(`${label}: no click had any effect — tried ${tried.join(', ')}`);
+  }
+
+  // ASPxGridView rebinds rows during scroll, which detaches the node we hold,
+  // so the id is re-resolved on every attempt rather than cached.
   async function pressById(doc, id, label, attempts = 30) {
     let lastError = null;
     for (let n = 0; n < attempts; n++) {
@@ -192,308 +235,89 @@
       }
       await sleep(250);
     }
-    throw new Error(
-      lastError ? lastError.message : `${label}: #${id} never became clickable`
-    );
+    throw new Error(lastError ? lastError.message : `${label}: #${id} never became clickable`);
   }
 
+  /* ------------------------------------------------------------ grid state */
 
-  /* ------------------------------------------------------------------ zip */
-
-  const CRC_TABLE = (() => {
-    const table = new Uint32Array(256);
-    for (let i = 0; i < 256; i++) {
-      let c = i;
-      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-      table[i] = c >>> 0;
-    }
-    return table;
-  })();
-
-  function crc32(bytes) {
-    let c = 0xffffffff;
-    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-    return (c ^ 0xffffffff) >>> 0;
+  // The detail row is what creates the GridUnit table. Until a project is
+  // expanded, every GridUnit id the run depends on is simply absent — which is
+  // what "cannot find the element" looks like from the outside.
+  function isProjectExpanded(doc) {
+    return !!doc.querySelector(SEL.detailExpanded);
   }
 
-  // Native DEFLATE keeps the archive small without pulling in a zip library.
-  // Falls back to stored entries where CompressionStream is unavailable.
-  async function deflateRaw(bytes) {
-    if (typeof CompressionStream === 'undefined') return null;
-    try {
-      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
-      const out = new Uint8Array(await new Response(stream).arrayBuffer());
-      return out.length < bytes.length ? out : null;
-    } catch (err) {
-      return null;
-    }
-  }
+  async function ensureProjectExpanded(doc) {
+    if (isProjectExpanded(doc)) return 'already open';
 
-  function dosDateTime(date) {
-    const time = (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1);
-    const day = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
-    return { time, day };
-  }
-
-  async function buildZip(files) {
-    const encoder = new TextEncoder();
-    const chunks = [];
-    const central = [];
-    const stamp = dosDateTime(new Date());
-    let offset = 0;
-
-    for (const file of files) {
-      const nameBytes = encoder.encode(file.name);
-      const raw = new Uint8Array(await file.blob.arrayBuffer());
-      const crc = crc32(raw);
-      const packed = await deflateRaw(raw);
-      const data = packed || raw;
-      const method = packed ? 8 : 0;
-
-      const header = new DataView(new ArrayBuffer(30));
-      header.setUint32(0, 0x04034b50, true);
-      header.setUint16(4, 20, true);
-      header.setUint16(6, 0x0800, true); // UTF-8 filename flag
-      header.setUint16(8, method, true);
-      header.setUint16(10, stamp.time, true);
-      header.setUint16(12, stamp.day, true);
-      header.setUint32(14, crc, true);
-      header.setUint32(18, data.length, true);
-      header.setUint32(22, raw.length, true);
-      header.setUint16(26, nameBytes.length, true);
-      header.setUint16(28, 0, true);
-
-      chunks.push(new Uint8Array(header.buffer), nameBytes, data);
-
-      const entry = new DataView(new ArrayBuffer(46));
-      entry.setUint32(0, 0x02014b50, true);
-      entry.setUint16(4, 20, true);
-      entry.setUint16(6, 20, true);
-      entry.setUint16(8, 0x0800, true);
-      entry.setUint16(10, method, true);
-      entry.setUint16(12, stamp.time, true);
-      entry.setUint16(14, stamp.day, true);
-      entry.setUint32(16, crc, true);
-      entry.setUint32(20, data.length, true);
-      entry.setUint32(24, raw.length, true);
-      entry.setUint16(28, nameBytes.length, true);
-      entry.setUint32(42, offset, true);
-      central.push(new Uint8Array(entry.buffer), nameBytes);
-
-      offset += 30 + nameBytes.length + data.length;
+    const toggle = doc.querySelector(SEL.detailCollapsed);
+    if (!toggle) {
+      throw new Error('No project row found to expand — open a project list before starting');
     }
 
-    const centralSize = central.reduce((sum, part) => sum + part.length, 0);
-    const end = new DataView(new ArrayBuffer(22));
-    end.setUint32(0, 0x06054b50, true);
-    end.setUint16(8, files.length, true);
-    end.setUint16(10, files.length, true);
-    end.setUint32(12, centralSize, true);
-    end.setUint32(16, offset, true);
+    await pressUntil(toggle, () => isProjectExpanded(doc), 'Project expand arrow');
 
-    return new Blob([...chunks, ...central, new Uint8Array(end.buffer)], {
-      type: 'application/zip',
-    });
+    // The units grid arrives with the detail row, over a separate callback.
+    await waitFor(`#${SEL.unitSelectButton(0)}`, { root: doc });
+    return 'expanded';
   }
 
-  function saveBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.style.display = 'none';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  // The inner input holds "C" or "U"; the display span mirrors it in its class
+  // name. Checking both means a markup change to one does not blind the check.
+  function isRowSelected(doc, index) {
+    const input = doc.getElementById(SEL.unitSelectInput(index));
+    if (input && input.value) return input.value.toUpperCase() === 'C';
+
+    const span = doc.getElementById(SEL.unitSelectButton(index));
+    if (!span) return false;
+    return /CheckBoxChecked/i.test(span.className);
   }
 
-  /* -------------------------------------------------------------- capture */
+  async function ensureRowSelected(doc, index, label) {
+    if (isRowSelected(doc, index)) return 'already ticked';
 
-  // The report is produced server-side and handed to the browser as a download.
-  // To collect it in memory instead, every plausible delivery route is wrapped:
-  // fetch, XHR, form submit, window.open and download anchors.
-  const Capture = {
-    armed: false,
-    diagnostic: false,
-    hits: [],
-    trace: [],
-    patched: new WeakSet(),
-    originalSubmit: new WeakMap(),
-
-    attach(win) {
-      if (!win || this.patched.has(win)) return;
+    // The grid's own client API is cleaner than synthesising a click, where
+    // DevExpress has published the object under the grid's name.
+    const grid = window[SEL.projectGrid] || window.GridUnit;
+    if (grid && typeof grid.SelectRow === 'function') {
       try {
-        void win.document;
-      } catch (err) {
-        return; // cross-origin frame, nothing we can do
-      }
-      this.patched.add(win);
-      const self = this;
-
-      if (win.fetch) {
-        const originalFetch = win.fetch;
-        win.fetch = function (...args) {
-          const url = args[0] && args[0].url ? args[0].url : String(args[0]);
-          return originalFetch.apply(this, args).then((res) => {
-            if (self.armed) self.inspect(res.clone(), url);
-            return res;
-          });
-        };
-      }
-
-      const FormProto = win.HTMLFormElement && win.HTMLFormElement.prototype;
-      if (FormProto && !this.originalSubmit.has(win)) {
-        const originalSubmit = FormProto.submit;
-        this.originalSubmit.set(win, originalSubmit);
-        FormProto.submit = function () {
-          if (self.armed && self.replaySubmit(win, this)) return undefined;
-          return originalSubmit.call(this);
-        };
-      }
-
-      const originalOpen = win.open;
-      win.open = function (url, ...rest) {
-        if (self.armed && url) {
-          self.note(`window.open → ${url}`);
-          self.fetchUrl(win, String(url));
-          return null;
+        grid.SelectRow(index, true);
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+          await sleep(200);
+          if (isRowSelected(doc, index)) return 'ticked via grid API';
         }
-        return originalOpen.call(this, url, ...rest);
-      };
-
-      win.document.addEventListener(
-        'click',
-        (event) => {
-          const anchor = event.target && event.target.closest && event.target.closest('a[href]');
-          if (!anchor || !self.armed) return;
-          if (!anchor.hasAttribute('download') && !/export|save|rtf/i.test(anchor.href)) return;
-          self.note(`anchor click → ${anchor.href}`);
-          if (self.diagnostic) return;
-          event.preventDefault();
-          self.fetchUrl(win, anchor.href);
-        },
-        true
-      );
-    },
-
-    note(message) {
-      this.trace.push(message);
-      if (this.diagnostic) UI.log(`· ${message}`, 'muted');
-    },
-
-    replaySubmit(win, form) {
-      try {
-        const method = (form.method || 'GET').toUpperCase();
-        const action = form.action || win.location.href;
-        this.note(`form.submit → ${method} ${action}`);
-        if (this.diagnostic) return false;
-
-        const params = new URLSearchParams();
-        for (const [key, value] of new win.FormData(form).entries()) {
-          if (typeof value === 'string') params.append(key, value);
-        }
-
-        const request =
-          method === 'POST'
-            ? win.fetch(action, {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: params.toString(),
-              })
-            : win.fetch(`${action}?${params.toString()}`, { credentials: 'include' });
-
-        request
-          .then((res) => this.inspect(res, action, { win, form }))
-          .catch(() => this.resubmit(win, form));
-        return true;
       } catch (err) {
-        return false;
+        /* fall through to clicking the checkbox */
       }
-    },
+    }
 
-    resubmit(win, form) {
-      const original = this.originalSubmit.get(win);
-      if (original) original.call(form);
-    },
+    const box = doc.getElementById(SEL.unitSelectButton(index));
+    await pressUntil(box, () => isRowSelected(doc, index), label);
+    return 'ticked';
+  }
 
-    fetchUrl(win, url) {
-      win
-        .fetch(url, { credentials: 'include' })
-        .then((res) => this.inspect(res, url))
-        .catch((err) => this.note(`fetch failed: ${err.message}`));
-    },
-
-    async inspect(res, url, fallback) {
-      try {
-        const disposition = res.headers.get('content-disposition') || '';
-        const type = res.headers.get('content-type') || '';
-        const isFile =
-          /attachment/i.test(disposition) ||
-          /rtf|msword|octet-stream|application\/zip/i.test(type);
-
-        this.note(`response ${res.status} ${type || 'no content-type'} ${isFile ? '(file)' : ''}`);
-
-        if (!isFile) {
-          if (fallback) this.resubmit(fallback.win, fallback.form);
-          return;
-        }
-
-        const blob = await res.blob();
-        if (!blob.size) return;
-
-        const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-        const name = match ? decodeURIComponent(match[1].trim()) : '';
-        this.hits.push({ name, blob, url });
-      } catch (err) {
-        this.note(`inspect failed: ${err.message}`);
-      }
-    },
-
-    arm() {
-      this.armed = true;
-      this.hits = [];
-    },
-
-    disarm() {
-      this.armed = false;
-    },
-
-    async collect(timeout = TIMEOUT.download) {
-      const deadline = Date.now() + timeout;
-      while (Date.now() < deadline) {
-        if (this.hits.length) return this.hits.shift();
-        await sleep(200);
-      }
-      return null;
-    },
-  };
-
-  Capture.attach(window);
-
-  /* ---------------------------------------------------------------- runner */
+  /* --------------------------------------------------------------- runner */
 
   const Runner = {
     cancelled: false,
 
     async exportUnit(index, options) {
       const doc = document;
-      const selectId = SEL.unitSelectButton(index);
       const reportId = SEL.unitReportButton(index);
 
-      const reportButton = doc.getElementById(reportId);
-      if (!reportButton) return { done: true };
+      // An absent report button means the grid has run out of rows.
+      if (!doc.getElementById(reportId)) return { done: true };
 
-      const selectButton = doc.getElementById(selectId);
-      if (selectButton) {
-        selectButton.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
-        await sleep(TIMEOUT.settle);
-      }
+      // Tick this unit's box first. The portal ties the report to the selected
+      // row, so skipping this can produce the wrong unit's report rather than
+      // an obvious failure.
+      const how = await ensureRowSelected(doc, index, `Unit ${index + 1} checkbox`);
+      if (how !== 'already ticked') UI.log(`  ${how}`, 'muted');
 
       await pressById(doc, reportId, `Unit ${index + 1} report button`);
 
-      // 1. Options dialog — pick which sections the report includes.
+      // 1. Options dialog — which sections the report includes.
       const optionsFrame = await waitFor(`${SEL.optionsDialog} iframe`);
       const optionsDoc = await frameDocument(optionsFrame);
 
@@ -511,11 +335,9 @@
       const generate = await waitFor(SEL.generateButton);
       await press(generate, 'Generate report button');
 
-      // 2. Report viewer — switch the export format before saving.
+      // 2. Report viewer — switch the export format, then save.
       const reportFrame = await waitFor(`${SEL.reportDialog} iframe`);
       const reportDoc = await frameDocument(reportFrame);
-      Capture.attach(reportFrame.contentWindow);
-
       await waitFor(SEL.reportCanvas, { root: reportDoc });
 
       const combo = reportDoc.querySelector(SEL.formatCombo);
@@ -528,18 +350,9 @@
         await sleep(TIMEOUT.settle);
       }
 
-      if (options.mode === 'zip') Capture.arm();
-
       const save = await waitFor(SEL.saveButton, { root: reportDoc });
       await press(save, 'Save button');
-
-      let file = null;
-      if (options.mode === 'zip') {
-        file = await Capture.collect();
-        Capture.disarm();
-      } else {
-        await sleep(1500); // give the native download time to start
-      }
+      await sleep(TIMEOUT.download);
 
       // 3. Close the viewer so the grid is interactive for the next unit.
       const closeBar = document.querySelector(SEL.dialogCloseBar);
@@ -549,21 +362,31 @@
       }
       await sleep(TIMEOUT.settle);
 
-      return { done: false, file };
+      return { done: false };
     },
 
     async run(options) {
       this.cancelled = false;
-      const collected = [];
+      let saved = 0;
       let missed = 0;
 
-      for (let n = 0; n < options.count; n++) {
+      // Without this the units grid does not exist yet and every lookup fails.
+      try {
+        const state = await ensureProjectExpanded(document);
+        UI.log(`Project ${state}.`, 'muted');
+      } catch (err) {
+        UI.log(err.message, 'danger');
+        return;
+      }
+
+      UI.log(`Starting at unit ${options.start}, running to the end of the list.`, 'muted');
+
+      for (let index = options.start - 1; index < MAX_UNITS; index++) {
         if (this.cancelled) {
-          UI.log('Stopped by user.', 'warning');
+          UI.log('Stopped.', 'warning');
           break;
         }
 
-        const index = options.start - 1 + n;
         const label = `Unit ${index + 1}`;
         UI.log(`${label} — exporting…`);
 
@@ -571,61 +394,38 @@
         try {
           result = await this.exportUnit(index, options);
         } catch (err) {
-          UI.log(`${label} — ${err.message}`, 'danger');
           missed++;
+          UI.log(`${label} — ${err.message}`, 'danger');
+          UI.count(saved, missed);
           continue;
         }
 
         if (result.done) {
-          UI.log('No further units in the grid.', 'muted');
+          UI.log('End of the unit list.', 'muted');
           break;
         }
 
-        if (options.mode === 'zip') {
-          if (result.file) {
-            const name = result.file.name || `unit-${String(index + 1).padStart(3, '0')}.rtf`;
-            collected.push({ name, blob: result.file.blob });
-            UI.log(`${label} — captured ${name}`, 'success');
-          } else {
-            missed++;
-            UI.log(`${label} — nothing captured`, 'warning');
-          }
-        } else {
-          UI.log(`${label} — download triggered`, 'success');
-        }
-
-        UI.progress(n + 1, options.count);
+        saved++;
+        UI.log(`${label} — saved`, 'success');
+        UI.count(saved, missed);
       }
 
-      Capture.disarm();
-
-      if (options.mode === 'zip') {
-        if (!collected.length) {
-          UI.log(
-            'No files were captured. Switch to "Download each" for this run, then use Diagnose so the export route can be pinned down.',
-            'danger'
-          );
-          return;
-        }
-        UI.log(`Packaging ${collected.length} file${collected.length === 1 ? '' : 's'}…`);
-        const zip = await buildZip(collected);
-        const date = new Date().toISOString().slice(0, 10);
-        saveBlob(zip, `ahu-reports-${date}.zip`);
-        UI.log('Archive saved.', 'success');
-      }
-
-      if (missed) UI.log(`${missed} unit${missed === 1 ? '' : 's'} did not produce a file.`, 'warning');
+      UI.log(
+        `Finished — ${saved} report${saved === 1 ? '' : 's'} saved` +
+          (missed ? `, ${missed} failed` : '') + '.',
+        missed ? 'warning' : 'success'
+      );
     },
   };
 
   /* -------------------------------------------------------------------- ui */
 
-  // Shadow DOM keeps the portal's stylesheet from reaching the panel and the
-  // panel's rules from reaching the portal.
+  // Shadow DOM keeps the portal's stylesheet out of the panel and the panel's
+  // rules out of the portal.
   const UI = {
     root: null,
     logEl: null,
-    progressEl: null,
+    countEl: null,
 
     tokens: `
       :host {
@@ -657,7 +457,7 @@
         top: var(--space-3);
         right: var(--space-3);
         z-index: 2147483647;
-        width: 320px;
+        width: 300px;
         max-width: calc(100vw - var(--space-4));
         background: var(--color-surface);
         border: 1px solid var(--color-border);
@@ -674,19 +474,12 @@
         padding: var(--space-3);
         border-bottom: 1px solid var(--color-border);
       }
-      h2 {
-        font-family: var(--font-heading);
-        font-size: 15px;
-        font-weight: 600;
-        margin: 0;
-        flex: 1;
-      }
+      h2 { font-family: var(--font-heading); font-size: 15px; font-weight: 600; margin: 0; flex: 1; }
       .icon { width: 18px; height: 18px; flex: none; color: var(--color-primary); }
       .body { padding: var(--space-3); display: grid; gap: var(--space-3); }
-      .row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
       .field { display: grid; gap: var(--space-1); }
       label { font-size: 12px; color: var(--color-text-muted); }
-      input[type='number'], select {
+      input[type='number'] {
         font: inherit;
         color: inherit;
         padding: var(--space-2);
@@ -715,16 +508,18 @@
         color: #fff;
         flex: 1;
       }
-      button.primary:hover:not(:disabled) { background: var(--color-primary-dark); border-color: var(--color-primary-dark); }
+      button.primary:hover:not(:disabled) {
+        background: var(--color-primary-dark);
+        border-color: var(--color-primary-dark);
+      }
       button:disabled { opacity: 0.5; cursor: not-allowed; }
       :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-      .track { height: 4px; background: var(--color-border); border-radius: var(--radius-sm); overflow: hidden; }
-      .bar { height: 100%; width: 0; background: var(--color-primary); transition: width 0.2s ease; }
+      .count { font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); margin: 0; }
       .log {
         font-family: var(--font-mono);
         font-size: 12px;
         line-height: 1.6;
-        max-height: 220px;
+        max-height: 240px;
         overflow-y: auto;
         border-top: 1px solid var(--color-border);
         padding: var(--space-3);
@@ -765,22 +560,9 @@
           <button type="button" id="hide" aria-label="Hide panel">–</button>
         </div>
         <div class="body">
-          <div class="row">
-            <div class="field">
-              <label for="start">Start at unit</label>
-              <input type="number" id="start" min="1" value="1">
-            </div>
-            <div class="field">
-              <label for="count">How many</label>
-              <input type="number" id="count" min="1" value="50">
-            </div>
-          </div>
           <div class="field">
-            <label for="mode">Delivery</label>
-            <select id="mode">
-              <option value="zip">One zip at the end</option>
-              <option value="each">Download each file</option>
-            </select>
+            <label for="start">Start from unit</label>
+            <input type="number" id="start" min="1" value="1">
           </div>
           <div class="check">
             <input type="checkbox" id="fan" checked>
@@ -790,11 +572,10 @@
             <input type="checkbox" id="price" checked>
             <label for="price">Include list price</label>
           </div>
-          <div class="track"><div class="bar" id="bar"></div></div>
+          <p class="count" id="count">Not started</p>
           <div class="actions">
             <button type="button" class="primary" id="start-run">Start export</button>
             <button type="button" id="stop" disabled>Stop</button>
-            <button type="button" id="diagnose">Diagnose</button>
           </div>
         </div>
         <div class="log" id="log" role="status" aria-live="polite"></div>
@@ -803,7 +584,7 @@
 
       this.root = shadow;
       this.logEl = shadow.getElementById('log');
-      this.progressEl = shadow.getElementById('bar');
+      this.countEl = shadow.getElementById('count');
 
       const startBtn = shadow.getElementById('start-run');
       const stopBtn = shadow.getElementById('stop');
@@ -812,12 +593,10 @@
         startBtn.disabled = true;
         stopBtn.disabled = false;
         this.logEl.textContent = '';
-        Capture.diagnostic = false;
+        this.count(0, 0);
 
         await Runner.run({
           start: Math.max(1, Number(shadow.getElementById('start').value) || 1),
-          count: Math.max(1, Number(shadow.getElementById('count').value) || 1),
-          mode: shadow.getElementById('mode').value,
           fanCurve: shadow.getElementById('fan').checked,
           listPrice: shadow.getElementById('price').checked,
         });
@@ -831,19 +610,11 @@
         this.log('Stopping after the current unit…', 'muted');
       });
 
-      shadow.getElementById('diagnose').addEventListener('click', () => {
-        Capture.diagnostic = true;
-        Capture.armed = true;
-        Capture.trace = [];
-        this.logEl.textContent = '';
-        this.log('Diagnostic mode on. Open one report and click Save by hand.', 'muted');
-      });
-
       shadow.getElementById('hide').addEventListener('click', () => {
         panel.style.display = 'none';
       });
 
-      this.log('Log in and open a project, then set a range above.', 'muted');
+      this.log('Open a project list, pick a starting unit, then start.', 'muted');
     },
 
     log(message, tone) {
@@ -855,17 +626,24 @@
       this.logEl.scrollTop = this.logEl.scrollHeight;
     },
 
-    progress(done, total) {
-      if (this.progressEl) this.progressEl.style.width = `${Math.round((done / total) * 100)}%`;
+    count(saved, missed) {
+      if (!this.countEl) return;
+      this.countEl.textContent = `${saved} saved` + (missed ? `, ${missed} failed` : '');
     },
   };
 
   /* Exposed for console debugging when a step stalls. From the Daikin page:
-       TNAHU.try('SomeElementId')   - report what is found, then try to click it
-       TNAHU.selectors              - the ids the run depends on            */
+       TNAHU.expand()        - expand the first project row
+       TNAHU.selected(0)     - is unit 1 ticked?
+       TNAHU.tick(0)         - tick it, verified
+       TNAHU.try('SomeId')   - report what is found, then try to click it
+       TNAHU.selectors       - the ids the run depends on                    */
   window.TNAHU = {
     selectors: SEL,
     press: press,
+    expand: () => ensureProjectExpanded(document),
+    selected: (i) => isRowSelected(document, i),
+    tick: (i) => ensureRowSelected(document, i, `Unit ${i + 1} checkbox`),
     async try(id, doc) {
       const target = (doc || document).getElementById(id);
       if (!target) {
