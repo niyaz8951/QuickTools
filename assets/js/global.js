@@ -40,7 +40,8 @@
     table: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>',
     type: '<path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/>',
     'chevron-down': '<path d="m6 9 6 6 6-6"/>',
-    crosshair: '<circle cx="12" cy="12" r="9"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6"/>'
+    crosshair: '<circle cx="12" cy="12" r="9"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6"/>',
+    psychro: '<path d="M4 4v14a2 2 0 0 0 2 2h14"/><path d="M20 7c-7 1-11 5-13 12"/><circle cx="14" cy="14" r="1.6"/>'
   };
 
   function icon(name, size) {
@@ -84,6 +85,7 @@
     { href: 'tools/container-calculator/', title: 'Container Calculator' },
     { href: 'tools/centre-of-gravity/', title: 'Centre of Gravity' },
     { href: 'tools/parts-extractor/', title: 'Parts List Extractor' },
+    { href: 'tools/psychrometric-chart/', title: 'Psychrometric Chart' },
     { href: 'tools/text-cleaner/', title: 'Text Cleaner' },
     { href: 'tools/ahu-report-batch/', title: 'AHU Batch Report Export' }
   ];

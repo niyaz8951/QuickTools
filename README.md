@@ -1,6 +1,6 @@
 # Thinkneering — Tools
 
-Five browser tools for engineering office work:
+Seven browser tools for engineering office work:
 
 - **Compliance Maker** — turns a specification PDF (or pasted text) into a numbered
   compliance matrix and exports it as a formatted `.xlsx`.
@@ -12,6 +12,13 @@ Five browser tools for engineering office work:
 - **Parts List Extractor** — reads a set of spare parts list workbooks, finds the
   header row on every sheet, maps the varying spellings to one schema, expands
   merged cells and unpivots the per-model quantity columns into one long table.
+- **Psychrometric Chart** — plot as many air states as a system has, joined into a
+  process chain, on an ASHRAE-style chart. Gives every property of each state, what
+  each step does to the air, the sensible and latent split, and a cooling coil's
+  apparatus dew point and bypass factor. Properties follow the ASHRAE Handbook —
+  Fundamentals, chapter 1.
+- **AHU Batch Report Export** — a browser script that works through a Daikin project
+  unit list and saves every unit report as RTF.
 - **Text Cleaner** — tidies manuscript text for a reader: straightens curly quotes,
   puts each line of speech on its own line, rewraps long paragraphs at a sentence
   boundary and spaces out scene breaks. Paste anywhere on the page and the cleaned
@@ -83,6 +90,12 @@ tools/parts-extractor/
   styles.css
   parts-extractor.js                    file picking, progress, download
   extractor-worker.js                   the extraction itself
+tools/psychrometric-chart/
+  index.html
+  styles.css
+  psychro.js                            ASHRAE Ch.1 property equations (TN.psychro)
+  chart.js                              SVG chart renderer (TN.psychroChart)
+  app.js                                state rows, results, export, persistence
 tools/text-cleaner/
   index.html
   styles.css
@@ -128,6 +141,23 @@ load, the CSS falls back to the system sans-serif and the layout still holds.
   `global.css`, so the 3D view follows the theme. The maths is exposed on
   `TN.cog` and `_dev/test-cog.js` exercises it under plain `node`, no
   dependencies: `node _dev/test-cog.js` from the repo root.
+- The Psychrometric Chart's maths is `tools/psychrometric-chart/psychro.js`, exposed
+  on `TN.psychro`. Every function cites the ASHRAE Fundamentals chapter 1 equation it
+  comes from, so a constant can be checked against the source rather than trusted.
+  Two suites run under plain `node` from the repo root, no dependencies:
+  `node _dev/test-psychro.js` checks the properties against the saturation-pressure
+  table, the chapter's worked example and inverse round trips; `node
+  _dev/test-psychro-chart.js` checks the renderer, mostly for `NaN` reaching path
+  data — browsers discard such a path silently, leaving a blank chart and no error.
+  Wet bulb and dew point are found by bisecting the defining relation rather than
+  from a fitted polynomial: bisection cannot diverge, and this runs once per state
+  rather than in a loop, so the robustness is free. Series colours are the
+  `--chart-1..8` tokens in `global.css`; the SVG is styled from `styles.css` rather
+  than by presentation attributes, because SVG attributes cannot resolve `var()` and
+  CSS can, which is what lets one chart follow both themes. Adiabatic mixing
+  (`TN.psychro.mix`, ASHRAE Eq 45/46) is implemented and tested but is not yet in the
+  interface: mixing is a junction rather than a step in a chain, so it needs a row
+  layout the current table does not have.
 - The Parts List Extractor's header dictionary is `HEADER_ALIASES` at the top of
   `extractor-worker.js`. A workbook whose sheet reports "no parts table found"
   usually needs one new alias adding there and nothing else.
