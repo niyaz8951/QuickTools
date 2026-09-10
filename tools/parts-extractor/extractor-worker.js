@@ -15,6 +15,9 @@
  */
 /* global XLSX */
 importScripts('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+/* SheetJS reads; xlsx-out writes. The community build discards cell fills on
+   write, and this tool needs to colour the rows it generates. */
+importScripts('xlsx-out.js');
 
 /* ------------------------------------------------------------------ *
  * 1. Config — the header dictionary.
@@ -473,7 +476,7 @@ function matchModels(map, fileName, sheetName, attribute) {
  * 5. Driver
  * ------------------------------------------------------------------ */
 const COLS = ['Source File', 'Sheet', 'Section', ...DESCRIPTOR_ORDER, 'Attribute', 'Value'];
-const MAP_COLS = ['MCQ-Modelname', 'DENV-Modelname', 'Model Match'];
+const MAP_COLS = ['MCQ-Modelname', 'DENV-Modelname', 'Model #', 'Model Match'];
 
 function aoaFromObjects(objs, cols) {
   const out = [cols];
@@ -590,6 +593,41 @@ self.onmessage = async (e) => {
       }
     }
 
+    /* --- one row per matched model ---------------------------------------
+       A header that matches several units produced one cell holding
+       "A / B / C", which cannot be filtered, sorted, pivoted or looked up.
+       Each match now gets its own row.
+
+       Every other cell is REPEATED on those rows, not left blank. Blank
+       carried-down cells look tidier in a printed sheet and are wrong for
+       everything else: a filter on DENV-Modelname returns rows with no part
+       number, a sort scatters the continuation rows away from their parent,
+       and a pivot cannot attribute a blank-keyed row to anything. A repeated
+       value costs a little file size and survives all three.
+
+       `Model #` numbers the models within one match, so the group is still
+       identifiable after the sheet has been sorted, and `Model Match` repeats
+       the count so "1 of 4" is readable on every row. */
+    let expandedRows = rows;
+    let expandedCount = 0;
+    if (modelMap) {
+      expandedRows = [];
+      for (const r of rows) {
+        const mcq = String(r['MCQ-Modelname'] || '').split(' / ').filter(Boolean);
+        const denv = String(r['DENV-Modelname'] || '').split(' / ').filter(Boolean);
+        const n = Math.max(mcq.length, denv.length);
+        if (n <= 1) { r['Model #'] = n ? '1' : ''; expandedRows.push(r); continue; }
+        for (let i = 0; i < n; i++) {
+          const copy = { ...r };
+          copy['MCQ-Modelname'] = mcq[i] || '';
+          copy['DENV-Modelname'] = denv[i] || '';
+          copy['Model #'] = String(i + 1);
+          if (i > 0) expandedCount++;
+          expandedRows.push(copy);
+        }
+      }
+    }
+
     /* Headers treated as models that may really be descriptors — the early
        warning that a workbook uses a spelling the dictionary does not know. */
     const flags = new Map();
@@ -617,7 +655,7 @@ self.onmessage = async (e) => {
       ? [...COLS, 'Attribute Raw', ...(modelMap ? MAP_COLS : [])]
       : COLS;
     XLSX.utils.book_append_sheet(wbOut,
-      XLSX.utils.aoa_to_sheet(aoaFromObjects(rows, outCols)), 'Parts_Long');
+      XLSX.utils.aoa_to_sheet(aoaFromObjects(expandedRows, outCols)), 'Parts_Long');
     XLSX.utils.book_append_sheet(wbOut,
       XLSX.utils.aoa_to_sheet(aoaFromObjects(log, ['Source File', 'Sheet', 'Rows', 'Status'])), 'Extraction_Log');
     if (flags.size) {
@@ -648,6 +686,8 @@ self.onmessage = async (e) => {
       type: 'done',
       buffer: buf,
       rowCount: rows.length,
+      outRowCount: expandedRows.length,
+      expandedCount,
       log,
       flagCount: flags.size,
       renameCount: renames.size,
