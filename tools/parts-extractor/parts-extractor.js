@@ -261,6 +261,12 @@
     if (msg.mapTotal) {
       statsEl.append(stat('headers mapped', msg.mapped + ' / ' + msg.mapTotal));
     }
+    if (msg.expandedCount) {
+      /* Two numbers, because they answer different questions: how many parts
+         were read, and how big the sheet you are about to open is. */
+      statsEl.append(stat('rows in the sheet', msg.outRowCount.toLocaleString()));
+      statsEl.append(stat('added by model split', '+' + msg.expandedCount.toLocaleString()));
+    }
     if (problems) statsEl.append(stat('failures', String(problems)));
 
     logBody.innerHTML = '';

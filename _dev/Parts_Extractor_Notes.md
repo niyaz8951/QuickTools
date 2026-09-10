@@ -264,6 +264,24 @@ When a sheet covers more than one build, two rules pick between them:
 Both of these are **inferences from the data, not documented rules**. They are the two
 lines to revisit first if a result looks wrong.
 
+#### One row per matched model
+
+A header matching several units used to produce one cell holding `A / B / C`, which
+cannot be filtered, sorted, pivoted or looked up. Each match now gets its own row,
+immediately below the first, numbered in `Model #` (1 of n) with the count repeated in
+`Model Match` so the group stays identifiable once the sheet has been sorted.
+
+**Every other cell is repeated on those rows, not left blank.** An earlier version
+carried only the model columns and blanked the rest, which reads more tidily on a
+printed sheet and is wrong for everything else: a filter on `DENV-Modelname` returns
+rows with no part number, a sort scatters the continuation rows away from their
+parent, and a pivot cannot attribute a blank-keyed row to anything. A repeated value
+costs a little file size and survives all three.
+
+Sheet size grows with the ambiguity: on a five-workbook run, 30,532 rows became
+46,687 — about 1.5x. With no overview supplied the grain is unchanged and the model
+columns are absent entirely.
+
 #### One header legitimately maps to several units
 
 Sheet `Mono SE ST_LN` covers both the standard and low-noise variants, and parts list
