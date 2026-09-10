@@ -284,28 +284,52 @@
 
     resultPanel.hidden = false;
     downloadBtn.disabled = msg.rowCount === 0;
+    downloadBtn.textContent = msg.asCsv ? 'Download parts table (CSV)' : 'Download Excel';
+    $('#download-qa-btn').hidden = !msg.asCsv;
     var notes = [];
     if (!msg.rowCount) notes.push('No parts tables were recognised. Check the log below.');
     if (msg.mapNote) notes.push(msg.mapNote);
+    if (msg.asCsv) {
+      notes.push('This result is ' + (msg.cells || 0).toLocaleString()
+        + ' cells — too large for one Excel sheet, so the parts table is a CSV. '
+        + 'Excel and Power Query both open it directly. The log and QA sheets are in the second file.');
+    }
     if (msg.mapTotal && msg.mapped < msg.mapTotal) {
       notes.push((msg.mapTotal - msg.mapped) + ' column header(s) found no model match — see QA_Model_Map.');
     }
     runNote.textContent = notes.join(' · ');
   }
 
-  downloadBtn.addEventListener('click', function () {
-    if (!result) return;
-    var blob = new Blob([result.buffer], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
+  function save(blob, filename) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'Parts_Database.xlsx';
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  downloadBtn.addEventListener('click', function () {
+    if (!result) return;
+    /* A large result ships the parts table as CSV — see the worker for why the
+       xlsx writer cannot build one this size. The log and QA sheets come in a
+       separate small workbook via the second button. */
+    if (result.asCsv && result.csvBlob) {
+      save(result.csvBlob, 'Parts_Long.csv');
+    } else {
+      save(new Blob([result.buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      }), 'Parts_Database.xlsx');
+    }
+  });
+
+  $('#download-qa-btn').addEventListener('click', function () {
+    if (!result) return;
+    save(new Blob([result.buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }), 'Parts_Database_log.xlsx');
   });
 
   clearBtn.addEventListener('click', function () {

@@ -333,8 +333,22 @@ function splitModelName(name) {
    been guessed at. See the guard in matchModels. */
 const MAX_MODEL_MATCHES = 12;
 
-/* Excel's worksheet limit is 1,048,576 rows including the header. */
+/* Excel's worksheet limit is 1,048,576 rows including the header. It is not
+   the binding constraint here — see XLSX_CELL_BUDGET. */
 const MAX_OUTPUT_ROWS = 1048575;
+
+/* The real ceiling is the writer, not Excel. XLSX.write builds the entire
+   worksheet as one object with a property per cell and then serialises it to
+   one XML string, so memory grows several hundred bytes per cell and the tab
+   dies somewhere past two or three million cells — "Invalid array length" or
+   "Too many properties to enumerate" depending on which allocation gives out
+   first. Neither message says what went wrong, and no guard makes a workbook
+   that large writable.
+   Past this budget the parts table is written as CSV instead: a CSV is built
+   from string chunks with no per-cell objects, so 400,000 rows costs about
+   0.6 seconds and 100 MB rather than failing outright. The log and QA sheets
+   are small and stay in a companion workbook. */
+const XLSX_CELL_BUDGET = 1200000;
 
 const VARIANT_SYNONYMS = {
   ECON: ['XE'],
@@ -513,6 +527,27 @@ function matchModels(map, fileName, sheetName, attribute) {
 const COLS = ['Source File', 'Sheet', 'Section', ...DESCRIPTOR_ORDER, 'Attribute', 'Value'];
 const MAP_COLS = ['MCQ-Modelname', 'DENV-Modelname', 'Model #', 'Model Match'];
 
+/* CSV, built in chunks. One string per ~8,000 rows keeps the peak allocation
+   small; the Blob is assembled from the pieces without ever holding the whole
+   file as a single JavaScript string. */
+function csvChunks(objs, cols) {
+  const esc = (v) => {
+    const t = v === undefined || v === null ? '' : String(v);
+    return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  const chunks = [];
+  let buf = cols.map(esc).join(',') + '\r\n';
+  for (let i = 0; i < objs.length; i++) {
+    const o = objs[i];
+    const line = new Array(cols.length);
+    for (let c = 0; c < cols.length; c++) line[c] = esc(o[cols[c]]);
+    buf += line.join(',') + '\r\n';
+    if ((i & 8191) === 8191) { chunks.push(buf); buf = ''; }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
+}
+
 function aoaFromObjects(objs, cols) {
   const out = [cols];
   for (const o of objs) out.push(cols.map((c) => (o[c] === undefined ? '' : o[c])));
@@ -685,23 +720,32 @@ self.onmessage = async (e) => {
 
     self.postMessage({ type: 'progress', fraction: 1, label: 'Writing the workbook' });
 
-    /* Excel itself stops at 1,048,576 rows, and the writer gives up long
-       before that with an allocation error rather than anything readable.
-       Failing here means the message names the cause and the fix. */
+    const wbOut = XLSX.utils.book_new();
+    const outCols = rows.length
+      ? [...COLS, 'Attribute Raw', ...(modelMap ? MAP_COLS : [])]
+      : COLS;
+
     if (expandedRows.length > MAX_OUTPUT_ROWS) {
       throw new Error(
-        `${expandedRows.length.toLocaleString()} rows is more than a worksheet holds. `
+        `${expandedRows.length.toLocaleString()} rows is more than any spreadsheet holds. `
         + `The extraction found ${rows.length.toLocaleString()} rows and the model split added the rest — `
         + `check QA_Model_Map for a column header matching an implausible number of models, `
         + `or run without the model map.`);
     }
 
-    const wbOut = XLSX.utils.book_new();
-    const outCols = rows.length
-      ? [...COLS, 'Attribute Raw', ...(modelMap ? MAP_COLS : [])]
-      : COLS;
-    XLSX.utils.book_append_sheet(wbOut,
-      XLSX.utils.aoa_to_sheet(aoaFromObjects(expandedRows, outCols)), 'Parts_Long');
+    /* Big results go out as CSV. The parts table is the only large sheet; the
+       log and the QA sheets are a few hundred rows and stay in a workbook, so
+       nothing is lost by splitting them into two files. */
+    const cells = expandedRows.length * outCols.length;
+    const asCsv = cells > XLSX_CELL_BUDGET;
+    let csvBlob = null;
+
+    if (asCsv) {
+      csvBlob = new Blob(csvChunks(expandedRows, outCols), { type: 'text/csv;charset=utf-8;' });
+    } else {
+      XLSX.utils.book_append_sheet(wbOut,
+        XLSX.utils.aoa_to_sheet(aoaFromObjects(expandedRows, outCols)), 'Parts_Long');
+    }
     XLSX.utils.book_append_sheet(wbOut,
       XLSX.utils.aoa_to_sheet(aoaFromObjects(log, ['Source File', 'Sheet', 'Rows', 'Status'])), 'Extraction_Log');
     if (flags.size) {
@@ -731,6 +775,9 @@ self.onmessage = async (e) => {
     self.postMessage({
       type: 'done',
       buffer: buf,
+      csvBlob,
+      asCsv,
+      cells,
       rowCount: rows.length,
       outRowCount: expandedRows.length,
       expandedCount,
