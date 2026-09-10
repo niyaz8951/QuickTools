@@ -329,6 +329,13 @@ function splitModelName(name) {
    "Econ" (economiser) marks the high-efficiency build, which is XE in the MCQ
    naming. This is a DOMAIN mapping, not something derivable from the files —
    add to it when a parts list uses a qualifier the matcher does not know. */
+/* A column header naming more units than this has not been identified, it has
+   been guessed at. See the guard in matchModels. */
+const MAX_MODEL_MATCHES = 12;
+
+/* Excel's worksheet limit is 1,048,576 rows including the header. */
+const MAX_OUTPUT_ROWS = 1048575;
+
 const VARIANT_SYNONYMS = {
   ECON: ['XE'],
   ECONOMISER: ['XE'],
@@ -397,7 +404,21 @@ function matchModels(map, fileName, sheetName, attribute) {
   let candidates = pool;
   let how = scope;
 
-  if (caps.length) {
+  /* THE HEADER ITSELF MUST IDENTIFY A UNIT.
+     Without this, a column header that carries no capacity — "Qty", "Remarks",
+     a stray label the dictionary does not know — still scored above zero,
+     because the words being scored include the SHEET name's tokens, which
+     match every model in the family regardless of the header. The result was
+     one row matching hundreds or thousands of models, and since each match
+     becomes its own row, a few hundred parts expanded into over a million.
+     That is what "Invalid array length" was: a runaway allocation, not a size
+     limit. A capacity is the only thing that names a specific unit, so no
+     capacity means no match. */
+  if (!caps.length) {
+    return { mcq: [], denv: [], how: 'no capacity in header', count: 0 };
+  }
+
+  {
     /* The capacity must appear. Leading zeros are inconsistent between the
        header and the model name, so "29.1" and "029.1" are both tried. */
     const wanted = [];
@@ -462,7 +483,21 @@ function matchModels(map, fileName, sheetName, attribute) {
     if (sc > bestScore) bestScore = sc;
     return { p, sc };
   });
-  const winners = scored.filter((x) => x.sc === bestScore).map((x) => x.p);
+  let winners = scored.filter((x) => x.sc === bestScore).map((x) => x.p);
+
+  /* Nothing in the name agreed — the capacity alone is not enough to claim a
+     match, since the same number appears across unrelated families. */
+  if (bestScore <= 0) {
+    return { mcq: [], denv: [], how: how + ' (no name agreement)', count: 0 };
+  }
+
+  /* Belt to the braces above. A header should resolve to a handful of units;
+     dozens means the keys failed to discriminate, and returning them would
+     multiply the sheet without telling anyone anything. The count is still
+     reported so QA_Model_Map shows what happened. */
+  if (winners.length > MAX_MODEL_MATCHES) {
+    return { mcq: [], denv: [], how: `${how} (${winners.length} matches — too ambiguous)`, count: 0 };
+  }
 
   return {
     mcq: winners.map((p) => p.mcq),
@@ -649,6 +684,17 @@ self.onmessage = async (e) => {
     }
 
     self.postMessage({ type: 'progress', fraction: 1, label: 'Writing the workbook' });
+
+    /* Excel itself stops at 1,048,576 rows, and the writer gives up long
+       before that with an allocation error rather than anything readable.
+       Failing here means the message names the cause and the fix. */
+    if (expandedRows.length > MAX_OUTPUT_ROWS) {
+      throw new Error(
+        `${expandedRows.length.toLocaleString()} rows is more than a worksheet holds. `
+        + `The extraction found ${rows.length.toLocaleString()} rows and the model split added the rest — `
+        + `check QA_Model_Map for a column header matching an implausible number of models, `
+        + `or run without the model map.`);
+    }
 
     const wbOut = XLSX.utils.book_new();
     const outCols = rows.length
