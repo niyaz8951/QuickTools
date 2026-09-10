@@ -1,0 +1,265 @@
+/* Sound level & NC calculator — tool-specific styles only.
+   Panels, fields, hints, buttons, tables, stats and notices all come from
+   global.css. Nothing here hardcodes a colour, font or spacing value; every
+   rule exists because global.css has no equivalent.
+
+   The chart's SVG is styled from here rather than by presentation attributes,
+   because SVG attributes cannot resolve var() — only CSS can. That is what
+   lets one chart follow both the light and the dark theme. */
+
+.snd-panel { margin-top: var(--space-4); }
+
+/* `hidden` is a user-agent rule and loses to any author rule that sets
+   `display`, so the toggled regions below need this guard. */
+[hidden] { display: none !important; }
+
+.snd-gap { flex: 1 1 var(--space-3); }
+.snd-lede { max-width: 76ch; margin-bottom: var(--space-3); }
+.snd-h3 { margin: var(--space-5) 0 var(--space-3); }
+
+.snd-example-note {
+  margin-top: var(--space-3);
+  max-width: 76ch;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--color-accent);
+}
+
+.snd-fields {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  align-items: start;
+}
+/* .field + .field adds a top margin; inside a grid the gap already spaces them. */
+.snd-fields .field + .field { margin-top: 0; }
+
+/* ------------------------------------------------------------- paths */
+
+.snd-path {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+}
+.snd-path + .snd-path { margin-top: var(--space-3); }
+
+.snd-path__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  justify-content: space-between;
+}
+.snd-path__sum { font-size: 0.8125rem; color: var(--color-text-muted); }
+
+.snd-blk > .label { margin-bottom: var(--space-2); }
+
+/* ------------------------------------------------- octave band entry */
+
+/* The eight (now ten) bands read as one sequence on the data sheet, so they
+   scroll horizontally rather than wrapping into two rows and losing that. */
+.snd-bandwrap { padding: var(--space-2); }
+
+.snd-bands {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(62px, 1fr));
+  gap: var(--space-2);
+  min-width: 660px;
+}
+
+.snd-band { display: grid; gap: var(--space-1); }
+.snd-band > label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+.snd-band > input { width: 100%; text-align: center; font-family: var(--font-mono); }
+
+/* 16 and 31.5 Hz are optional on most data sheets, so they sit visually apart
+   from the eight bands that NC is actually rated on. */
+.snd-band--low > input { background: var(--color-surface-sunken); }
+
+/* ------------------------------------------------- disclosure blocks */
+
+.snd-more {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-3);
+}
+.snd-more + .snd-more { margin-top: var(--space-2); }
+.snd-path .snd-more { background: var(--color-surface-sunken); }
+
+.snd-more > summary {
+  cursor: pointer;
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+.snd-more > summary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: var(--space-1);
+  border-radius: var(--radius-sm);
+}
+.snd-more[open] > summary { margin-bottom: var(--space-3); }
+
+.snd-more__body { display: grid; gap: var(--space-3); }
+.snd-more__body > p,
+.snd-more__body > ul { margin: 0; max-width: 76ch; color: var(--color-text-muted); }
+.snd-more__body > ul { padding-left: var(--space-4); display: grid; gap: var(--space-2); }
+.snd-more__body strong { color: var(--color-text); }
+
+/* Displayed formulae. Mono at body size rather than a maths renderer — these
+   are short enough to read as a line of text. */
+.snd-eq {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  color: var(--color-text);
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  overflow-x: auto;
+}
+
+.snd-tip {
+  border-left: 2px solid var(--color-accent);
+  padding-left: var(--space-3);
+}
+
+.snd-mini {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+}
+.snd-mini .field-row { margin-top: var(--space-1); }
+
+.snd-note { max-width: 76ch; }
+
+/* --------------------------------------------------- attenuation list */
+
+.snd-atten { display: grid; gap: var(--space-2); }
+
+.snd-atten__group {
+  margin: var(--space-3) 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.snd-atten__group:first-child { margin-top: 0; }
+
+.snd-atten__row {
+  display: grid;
+  grid-template-columns: auto 1fr 74px;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+.snd-atten__row label { font-size: 0.9375rem; line-height: 1.35; }
+.snd-atten__row input[type='number'] {
+  width: 100%; text-align: center; font-family: var(--font-mono);
+}
+.snd-atten__row input[type='number']:disabled { opacity: 0.4; }
+
+/* ---------------------------------------------------------- verdict */
+
+.snd-verdict-wrap { margin-top: var(--space-4); }
+.snd-verdict p { max-width: 76ch; }
+.snd-verdict p + p { margin-top: var(--space-2); }
+
+.snd-verdict__title {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  color: var(--color-text);
+}
+.notice--success .snd-verdict__title { color: var(--color-success); }
+.notice--warning .snd-verdict__title { color: var(--color-warning); }
+.notice--danger .snd-verdict__title { color: var(--color-danger); }
+
+/* ------------------------------------------------------------ chart */
+
+.snd-chart-scroll { overflow-x: auto; }
+.snd-svg { display: block; width: 100%; min-width: 600px; height: auto; }
+
+.snd-grid { stroke: var(--color-border); stroke-width: 1; }
+.snd-axis {
+  fill: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-size: 11px;
+}
+.snd-nc { fill: none; stroke: var(--color-border); stroke-width: 1; }
+.snd-nc-lbl {
+  fill: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.snd-target {
+  fill: none;
+  stroke: var(--color-warning);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+.snd-target-lbl {
+  fill: var(--color-warning);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+.snd-result {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.snd-dot { fill: var(--color-primary); }
+.snd-dot--over { fill: var(--color-danger); }
+
+.snd-legend { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-2); }
+.snd-legend span { display: inline-flex; align-items: center; gap: var(--space-2); }
+
+.snd-key { width: 18px; height: 3px; border-radius: 2px; flex: none; }
+.snd-key--result { background: var(--color-primary); }
+.snd-key--target { background: var(--color-warning); }
+.snd-key--over { background: var(--color-danger); }
+.snd-key--nc { background: var(--color-border); }
+
+/* ------------------------------------------------------------ table */
+
+/* The result row carries the answer, so it is weighted above the working. */
+.snd-rowkey th, .snd-rowkey td { font-weight: 600; }
+td.snd-sub { color: var(--color-text-muted); }
+/* Exceedance is flagged by a triangle as well as colour, so the table does not
+   rely on colour alone. */
+td.snd-over { color: var(--color-danger); font-weight: 600; }
+
+/* --------------------------------------------------------- caveats */
+
+.snd-caveats {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+.snd-caveats li { color: var(--color-text-muted); max-width: 78ch; }
+.snd-caveats strong { color: var(--color-text); }
+
+/* ------------------------------------------------------------ print */
+
+@media print {
+  .toolbar, .snd-atten, .site-header, .site-footer { display: none !important; }
+  /* Disclosures are collapsed on screen but their content should still print. */
+  .snd-more { border: 0; padding: 0; }
+  .snd-more > summary { list-style: none; }
+  .snd-more__body { display: grid !important; }
+  .snd-path, .panel { break-inside: avoid; }
+}

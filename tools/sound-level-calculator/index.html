@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../assets/css/global.css">
+  <link rel="stylesheet" href="styles.css">
+  <title>Sound level &amp; NC calculator — Thinkneering</title>
+  <meta name="description" content="Turn octave band sound power from an AHU, FCU or chiller into the level a person actually hears, rated against NC and RC Mark II. Includes the path attenuation chain, the criteria curves and the background you need to read a data sheet correctly. Runs in your browser.">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header data-site-header></header>
+
+  <main id="main" class="wrap" data-tool="sound-level-calculator">
+
+    <div class="page-head">
+      <p class="eyebrow">Tools</p>
+      <h1>Sound level &amp; NC calculator</h1>
+      <p class="page-head__lede">Catalogues quote power. Specifications demand pressure.</p>
+      <p>Enter octave band data for a fan coil, air handler or chiller, describe the path the
+        noise takes to reach a person, and get the level at the listener with an NC rating and a
+        full RC Mark&nbsp;II rating including the quality assessment index. Criteria curves follow
+        ANSI/ASA S12.2; the room and path calculations follow the ASHRAE Handbook&nbsp;— Applications,
+        Chapter&nbsp;49. Nothing is uploaded.</p>
+    </div>
+
+    <div class="toolbar">
+      <label class="sr-only" for="example">Worked example</label>
+      <select id="example">
+        <option value="">Load a worked example&hellip;</option>
+        <option value="fww200">FCU FWW200VA — medium speed</option>
+        <option value="fww600">FCU FWW600VA — medium speed</option>
+        <option value="fww1000">FCU FWW1000VA — medium speed</option>
+        <option value="ashrae">ASHRAE Chapter 49 — RC Mark II check case</option>
+        <option value="clear">Clear all bands</option>
+      </select>
+      <span class="snd-gap" aria-hidden="true"></span>
+      <button type="button" class="btn btn--ghost" id="btn-print">Print</button>
+    </div>
+
+    <p class="hint snd-example-note" id="example-note" hidden></p>
+
+    <!-- 1 · Scenario -->
+    <section class="panel snd-panel" aria-labelledby="scenario-title">
+      <div class="panel__head"><h2 id="scenario-title">Scenario</h2></div>
+
+      <div class="snd-fields">
+        <div class="field">
+          <label for="equip">Equipment</label>
+          <select id="equip">
+            <option value="fcu">Fan coil unit — ceiling concealed</option>
+            <option value="ahu-duct">Air handling unit — served space via ducts</option>
+            <option value="ahu-plant">Air handling unit — plant room breakout</option>
+            <option value="chiller">Air-cooled chiller — outdoors</option>
+            <option value="other">Other or custom</option>
+          </select>
+          <p class="hint" id="equip-help"></p>
+        </div>
+
+        <div class="field">
+          <label for="mode">Calculation</label>
+          <select id="mode">
+            <option value="indoor">Indoor — level in a room, rated NC and RC</option>
+            <option value="outdoor">Outdoor — level at a distance, rated dB(A)</option>
+            <option value="direct">Rate a spectrum I already have — no propagation</option>
+          </select>
+          <p class="hint">Indoor accounts for reverberant build-up. Outdoor assumes free-field
+            spreading. The third option rates octave band levels you already have — from a sound
+            level meter, or from the end of a duct acoustics run — exactly as entered.</p>
+        </div>
+
+        <div class="field" id="quantity-wrap">
+          <label for="quantity">Data you are entering</label>
+          <select id="quantity">
+            <option value="lw">Sound power, L<sub>w</sub></option>
+            <option value="lp">Sound pressure, L<sub>p</sub> at a stated distance</option>
+          </select>
+          <p class="hint">Ducted equipment publishes power. Cassettes and hi-walls often publish pressure — check the footnote.</p>
+        </div>
+
+        <div class="field">
+          <label for="weighting">Band weighting in your data</label>
+          <select id="weighting">
+            <option value="lin">Unweighted, linear dB</option>
+            <option value="a">Already A-weighted, dB(A) per band</option>
+          </select>
+          <p class="hint">Get this wrong and the NC rating comes out far too flattering.</p>
+        </div>
+
+        <div class="field" id="lp-dist-wrap" hidden>
+          <label for="lp-dist">Measurement distance, m</label>
+          <input type="number" id="lp-dist" value="1" min="0.1" step="0.1" inputmode="decimal">
+          <p class="hint">Used to recover sound power before re-radiating it into your room.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2 · Source and path -->
+    <section class="panel snd-panel" aria-labelledby="source-title">
+      <div class="panel__head">
+        <h2 id="source-title">Source and path</h2>
+        <button type="button" class="btn btn--ghost btn--sm" id="toggle-b">Add second path</button>
+      </div>
+      <p class="hint snd-lede">Most equipment radiates by more than one route at once, and each
+        route gets a different amount of attenuation. Enter them as separate paths and they are
+        combined logarithmically at the listener.</p>
+      <div id="paths"></div>
+    </section>
+
+    <!-- 3 · Room or propagation -->
+    <section class="panel snd-panel" id="room-panel" aria-labelledby="room-title">
+      <div class="panel__head"><h2 id="room-title"><span id="room-label">Receiving room</span></h2></div>
+
+      <div id="indoor-inputs">
+        <div class="snd-fields">
+          <div class="field"><label for="rl">Room length, m</label>
+            <input type="number" id="rl" value="6" min="0.5" step="0.1" inputmode="decimal"></div>
+          <div class="field"><label for="rw">Room width, m</label>
+            <input type="number" id="rw" value="4" min="0.5" step="0.1" inputmode="decimal"></div>
+          <div class="field"><label for="rh">Room height, m</label>
+            <input type="number" id="rh" value="2.8" min="0.5" step="0.1" inputmode="decimal"></div>
+          <div class="field"><label for="rdist">Source to listener, m</label>
+            <input type="number" id="rdist" value="1.5" min="0.1" step="0.1" inputmode="decimal">
+            <p class="hint">Ceiling outlet to ear is about 1.5 m seated.</p></div>
+          <div class="field"><label for="absorb">Room finish</label>
+            <select id="absorb"></select>
+            <p class="hint">Sets the absorption coefficients used for reverberant build-up.</p></div>
+          <div class="field"><label for="q-in">Directivity, Q</label>
+            <select id="q-in">
+              <option value="1">1 — hanging free, away from surfaces</option>
+              <option value="2" selected>2 — flush in one surface, such as a ceiling grille</option>
+              <option value="4">4 — at the junction of two surfaces</option>
+              <option value="8">8 — in a corner</option>
+            </select>
+            <p class="hint">Doubles each time the source is backed by another hard surface.</p></div>
+        </div>
+      </div>
+
+      <div id="outdoor-inputs" hidden>
+        <div class="snd-fields">
+          <div class="field"><label for="odist">Distance to receiver, m</label>
+            <input type="number" id="odist" value="15" min="1" step="1" inputmode="decimal">
+            <p class="hint">Usually the site boundary or the nearest window.</p></div>
+          <div class="field"><label for="q-out">Directivity, Q</label>
+            <select id="q-out">
+              <option value="2" selected>2 — on open ground or a flat roof</option>
+              <option value="4">4 — against one wall</option>
+              <option value="8">8 — in a corner between two walls</option>
+            </select></div>
+          <div class="field"><label for="barrier">Barrier path difference &delta;, m</label>
+            <input type="number" id="barrier" value="0" min="0" step="0.05" inputmode="decimal">
+            <p class="hint">Extra distance the sound must travel over an acoustic screen. Zero means no screen.</p></div>
+        </div>
+        <p class="notice snd-note">Outdoor mode uses hemispherical spreading, ISO 9613-2 air
+          absorption at 20&nbsp;&deg;C and 70% relative humidity, and a Maekawa barrier estimate
+          capped at 24&nbsp;dB. It assumes no reflecting facade behind the receiver and no ground
+          effect, which is neutral to conservative for a typical rooftop chiller.</p>
+      </div>
+    </section>
+
+    <!-- 4 · Target -->
+    <section class="panel snd-panel" aria-labelledby="target-title">
+      <div class="panel__head"><h2 id="target-title">Target</h2></div>
+      <div class="snd-fields">
+        <div class="field" id="nc-target-wrap">
+          <label for="nc-target">Design criterion</label>
+          <select id="nc-target"></select>
+          <p class="hint">Brand standards for luxury hotels are usually tighter than the general
+            ASHRAE range. The project specification wins over any default here.</p>
+        </div>
+        <div class="field" id="dba-target-wrap" hidden>
+          <label for="dba-target">Boundary limit, dB(A)</label>
+          <input type="number" id="dba-target" value="45" min="20" max="90" step="1" inputmode="decimal">
+          <p class="hint">Environmental limits are set by local authority and vary by time of day
+            and land use. Enter the figure your project is held to.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5 · Result -->
+    <section class="panel snd-panel" aria-labelledby="result-title">
+      <div class="panel__head"><h2 id="result-title">Result</h2></div>
+
+      <div class="stat-grid" id="stats" aria-live="polite"></div>
+      <div id="verdict" class="snd-verdict-wrap"></div>
+
+      <h3 class="snd-h3">Spectrum against the criteria curves</h3>
+      <div class="snd-chart-scroll" id="chart" role="img"
+           aria-label="Octave band spectrum plotted against the family of noise criteria curves"></div>
+      <p class="hint snd-legend" id="legend"></p>
+
+      <h3 class="snd-h3">Band by band</h3>
+      <div class="table-wrap">
+        <table class="data" id="table"></table>
+      </div>
+
+      <h3 class="snd-h3">Duct velocity for this criterion</h3>
+      <div id="ductv"></div>
+    </section>
+
+    <!-- 6 · Background -->
+    <section class="panel snd-panel" aria-labelledby="learn-title">
+      <div class="panel__head"><h2 id="learn-title">Background</h2></div>
+      <p class="hint snd-lede">Enough theory to read a data sheet correctly and defend a number in
+        a review. Sources are named at the end of each panel.</p>
+
+      <details class="snd-more">
+        <summary>Sound power, sound pressure and sound intensity</summary>
+        <div class="snd-more__body">
+          <p>Three quantities describe the same phenomenon and are constantly confused for one
+            another, because all three are expressed in decibels.</p>
+          <p><strong>Sound power, L<sub>w</sub></strong> is the acoustic energy the source emits.
+            It belongs to the machine and does not change wherever you install it. Reference
+            10<sup>&minus;12</sup>&nbsp;W. This is what equipment catalogues publish.</p>
+          <p><strong>Sound pressure, L<sub>p</sub></strong> is what an ear or a microphone
+            registers at one particular spot. It depends on distance, on room finish, and on
+            everything the sound had to pass through. Reference 20&nbsp;&micro;Pa, which is
+            2&nbsp;&times;&nbsp;10<sup>&minus;5</sup>&nbsp;Pa &mdash; roughly the quietest sound a
+            healthy young ear can detect at 1&nbsp;kHz.</p>
+          <p><strong>Sound intensity, L<sub>i</sub></strong> is the flow of acoustic energy through
+            an area, and unlike the other two it has a direction. Reference
+            10<sup>&minus;12</sup>&nbsp;W/m². Mostly used for measurement rather than
+            specification.</p>
+          <p>The decibel itself is just a ratio on a log scale:</p>
+          <p class="snd-eq">dB = 10 &middot; log<sub>10</sub> (measured &divide; reference)</p>
+          <p>Every criterion you will ever be handed &mdash; NC, RC, dB(A), a boundary limit
+            &mdash; is written in sound <em>pressure</em>. Every catalogue you will ever open is
+            written in sound <em>power</em>. Bridging those two is the entire job of this tool, and
+            catalogue figures look alarming next to an NC 30 specification only because they are
+            not the same quantity.</p>
+          <p class="hint">Reference: ISO 3741 and ISO 3744 for power determination; ANSI/ASA S1.1
+            for terminology. Note that a small number of published training decks state the sound
+            pressure reference as 10<sup>&minus;12</sup>&nbsp;Pa. That is a typographical slip for
+            the power reference &mdash; the pressure reference is 20&nbsp;&micro;Pa.</p>
+        </div>
+      </details>
+
+      <details class="snd-more">
+        <summary>Octave bands and weighting</summary>
+        <div class="snd-more__body">
+          <p>Fan noise is spread across the frequency range, not concentrated in one tone, and both
+            the ear and the criteria curves treat each part of that range differently. Splitting the
+            sound into octave bands &mdash; each one double the frequency of the last &mdash; lets
+            you see the shape.</p>
+          <p>Shape matters because attenuation is frequency-dependent. A lined duct swallows high
+            frequencies easily and does almost nothing at 63&nbsp;Hz. Two units with identical
+            overall dB(A) can behave completely differently on site.</p>
+          <p><strong>A-weighting</strong> discounts the low frequencies the ear is less sensitive
+            to, so that one number tracks perceived loudness reasonably well. It descends from the
+            equal-loudness contours published by Fletcher and Munson in 1933. C-weighting is much
+            flatter and is used where low frequency content matters.</p>
+          <p>NC and RC are defined on <em>unweighted</em> band levels. If your data sheet publishes
+            A-weighted bands and you rate them directly, the answer will be wrong and too
+            optimistic. Set the weighting selector above to match your sheet and the correction is
+            removed for you.</p>
+          <p class="snd-tip">Quick check: log-sum the bands as published. If they add up to the
+            sheet's own overall dB(A) figure, the bands are already A-weighted. If the sum lands
+            several dB higher, they are unweighted.</p>
+          <div id="band-table"></div>
+          <p class="hint">Reference: ANSI S1.11 and IEC 61260 for band definitions; IEC 61672-1 for
+            the weighting curves.</p>
+        </div>
+      </details>
+
+      <details class="snd-more">
+        <summary>Adding levels together</summary>
+        <div class="snd-more__body">
+          <p>Decibels are logarithmic, so they do not add arithmetically. Two identical sources give
+            3&nbsp;dB more than one, not double.</p>
+          <p class="snd-eq">L<sub>total</sub> = 10 &middot; log<sub>10</sub> ( 10<sup>L₁/10</sup> +
+            10<sup>L₂/10</sup> + &hellip; )</p>
+          <p>For mental arithmetic, work from the difference between the two levels and add to the
+            larger one: equal or within 1&nbsp;dB, add 3; 2 to 4&nbsp;dB apart, add 2; 5 to
+            9&nbsp;dB apart, add 1; 10&nbsp;dB or more apart, add nothing that matters.</p>
+          <p>That last rule is the useful one in review. If your carefully attenuated supply path
+            arrives 13&nbsp;dB below the total, it is contributing nothing, and every hour spent
+            improving it is wasted until the dominant path is dealt with.</p>
+        </div>
+      </details>
+
+      <details class="snd-more">
+        <summary>What a person can actually hear</summary>
+        <div class="snd-more__body">
+          <p>Chasing tenths of a decibel is wasted effort. The table below is the honest resolution
+            of the exercise, and it gets coarser as frequency rises.</p>
+          <div id="jnd-table"></div>
+          <p>Tones are a separate problem from level. A pure tone becomes perceptible when it stands
+            roughly 5 to 6&nbsp;dB above the neighbouring critical bands, and many people find any
+            perceptible tone objectionable regardless of how quiet it is. The ear behaves as a bank
+            of band-pass filters, and at mid frequencies each filter is close to a third-octave
+            wide &mdash; so a tone that sits inside one octave band can be masked in the published
+            data and still be plainly audible on site.</p>
+          <div class="snd-mini">
+            <p class="label">Blade pass frequency</p>
+            <p class="hint">Where a fan's tone will land. Blade count times speed, divided by 60.</p>
+            <div class="field-row">
+              <div class="field"><label for="bpf-blades">Blades</label>
+                <input type="number" id="bpf-blades" value="9" min="1" step="1" inputmode="numeric"></div>
+              <div class="field"><label for="bpf-rpm">Fan speed, rpm</label>
+                <input type="number" id="bpf-rpm" value="1200" min="1" step="10" inputmode="numeric"></div>
+            </div>
+            <p class="snd-eq" id="bpf-out"></p>
+          </div>
+        </div>
+      </details>
+
+      <details class="snd-more">
+        <summary>NC — how the rating works</summary>
+        <div class="snd-more__body">
+          <p>Noise criteria curves were developed by Leo Beranek at Bolt Beranek and Newman in 1957,
+            in response to HVAC noise complaints in post-war office buildings. Each curve is a set of
+            maximum octave band sound pressure levels from 63&nbsp;Hz to 8&nbsp;kHz. The curves slope
+            downward with frequency, reflecting that the ear tolerates low frequency rumble more
+            readily than high frequency hiss. The designating number was set to correspond roughly to
+            the speech interference level.</p>
+          <p>The rating method is tangency. Plot your spectrum, and your NC rating is the lowest
+            curve your spectrum fits entirely underneath. A single band poking over the line sets the
+            rating for the whole spectrum, which is why this tool always reports which band is
+            governing. Good practice is to quote both, as NC 45 (125&nbsp;Hz), because the band tells
+            the next person where to look.</p>
+          <p>NC's weakness is that it treats every spectrum below a given curve as equivalent. One
+            can be rumbly and one can be hissy and both rate NC 30. That is what RC was invented to
+            fix.</p>
+          <p class="hint">Reference: ANSI/ASA S12.2, Criteria for Evaluating Room Noise, which is the
+            governing document today and sets out an A-weighted survey method, an engineering method
+            using the NC curves, and an RNC method for low-frequency fluctuating noise.</p>
+        </div>
+      </details>
+
+      <details class="snd-more">
+        <summary>RC Mark II — the number and the letter</summary>
+        <div class="snd-more__body">
+          <p>Room criteria were introduced by Warren Blazier for ASHRAE in 1981 and refined as RC
+            Mark&nbsp;II in 1997. Unlike NC, the number is not a tangency. It is simply the arithmetic
+            mean of the 500, 1000 and 2000&nbsp;Hz bands.</p>
+          <p>The letter is where the value is. A reference contour is drawn as a straight line
+            through that level at 1&nbsp;kHz, falling 5&nbsp;dB per octave, with the 16&nbsp;Hz point
+            held level with 31.5&nbsp;Hz rather than extrapolated. The spectrum is compared against
+            that contour in three regions:</p>
+          <ul>
+            <li><strong>LF</strong> — 16, 31.5 and 63&nbsp;Hz. Excess here reads as rumble.</li>
+            <li><strong>MF</strong> — 125, 250 and 500&nbsp;Hz. Excess here reads as roar.</li>
+            <li><strong>HF</strong> — 1000, 2000 and 4000&nbsp;Hz. Excess here reads as hiss.</li>
+          </ul>
+          <p>Each region gets a spectral deviation factor, which is the energy average of the
+            differences across its three bands. The <strong>quality assessment index</strong> is the
+            range between the highest and lowest of those three factors. If the index is 5&nbsp;dB or
+            less the spectrum is balanced and rates (N) for neutral. Above 5, the region with the
+            largest positive factor names the character. An index up to 10&nbsp;dB is marginal;
+            beyond 10&nbsp;dB, ASHRAE expects an average occupant to find it objectionable.</p>
+          <p>This matters more than the number on hotel and residential work. A rumbly RC 30 draws
+            complaints that a neutral RC 33 does not. The tool computes the full RC Mark&nbsp;II
+            rating including the index, and tells you when it is doing so without the two lowest
+            bands.</p>
+          <p class="hint">Reference: ASHRAE Handbook — Applications, Chapter 49, Noise and Vibration
+            Control, Tables 2 and 3. The worked example in the example loader reproduces the
+            handbook's own published case, which returns RC 35(LF) with an index of 7.2.</p>
+        </div>
+      </details>
+
+      <details class="snd-more">
+        <summary>The room equation</summary>
+        <div class="snd-more__body">
+          <p>Sound power entering a room builds up until the energy leaving through the surfaces and
+            absorbed inside it balances the energy going in. The result is the room effect:</p>
+          <p class="snd-eq">L<sub>p</sub> = L<sub>w</sub> + 10 &middot; log<sub>10</sub>
+            ( Q / 4&pi;r² + 4 / R )</p>
+          <p>The first term is the direct field &mdash; what reaches you straight from the source.
+            <strong>Q</strong> is directivity: 1 in free space, 2 flush in a surface, 4 at the
+            junction of two, 8 in a corner. <strong>r</strong> is the distance to the listener.</p>
+          <p>The second term is the reverberant field, set by the room constant:</p>
+          <p class="snd-eq">R = S&#772;&alpha; / (1 &minus; &#772;&alpha;)</p>
+          <p>where S is total surface area and &#772;&alpha; is the average absorption coefficient.
+            A furnished hotel guest room at 1.5&nbsp;m from a ceiling grille typically gives about
+            &minus;6.5&nbsp;dB. That is the entire room effect, and it is much smaller than most
+            people assume &mdash; it is not the 15 or 20&nbsp;dB that would rescue a bad
+            selection.</p>
+          <p>Outdoors there is no reverberant term at all. Level falls 6&nbsp;dB every time the
+            distance doubles, minus air absorption and any barrier.</p>
+        </div>
+      </details>
+
+      <details class="snd-more">
+        <summary>Fan laws, duct velocity and data quality</summary>
+        <div class="snd-more__body">
+          <p>Fan sound power tracks airflow and static pressure:</p>
+          <p class="snd-eq">L<sub>w</sub> &prop; 10 &middot; log<sub>10</sub>(flow) + 20 &middot;
+            log<sub>10</sub>(static pressure)</p>
+          <p>Airflow is set by the load and you cannot argue with it. Static pressure is set by your
+            system design, and it carries twice the weight. Every unnecessary pressure drop you
+            design out is bought back as quiet, which is why coil face velocity, filter selection and
+            duct sizing are acoustic decisions as much as energy ones.</p>
+          <p>Duct velocity is the other half of that. Push air too fast and the ductwork generates
+            the noise you installed attenuators to remove. The table in the result section above
+            shows the ASHRAE guidance for whichever criterion you have selected.</p>
+          <p><strong>How much precision does the data deserve?</strong> AMCA 303 is blunt about it:
+            differences in sound power of 2&nbsp;dB or less are not significant; when comparing
+            between manufacturers, disregard differences under 4&nbsp;dB; and in the 63&nbsp;Hz band,
+            disregard differences of 6&nbsp;dB or less. AMCA also notes that a test room without pure
+            tone qualification can carry ±8&nbsp;dB of uncertainty in the third-octave band
+            containing the blade pass frequency.</p>
+          <p>So a bid comparison that turns on a 3&nbsp;dB difference between two manufacturers is
+            not a real difference. Say so in the review rather than ranking on noise.</p>
+          <p class="hint">Reference: AMCA 303, Applications of Sound Power Level Ratings. Test
+            methods: AMCA 300 and AHRI 260 for ducted air-moving equipment, AHRI 370 for large
+            outdoor equipment, ISO 3741 for reverberant rooms, ISO 9614 for intensity.</p>
+        </div>
+      </details>
+
+      <details class="snd-more">
+        <summary>Design criteria by space type</summary>
+        <div class="snd-more__body">
+          <p>ASHRAE publishes ranges rather than single numbers, and every value below assumes no
+            audible tones and no audible level fluctuation over time. A spectrum that meets its
+            number but hunts up and down, or carries a blade pass tone, has not met the intent.</p>
+          <div id="crit-table"></div>
+          <p class="hint">Reference: ASHRAE Handbook — Applications, Chapter 49, Table 1. Values
+            here sit at the point brand standards and project specifications commonly land within the
+            published range. Luxury hotel operators frequently specify tighter than ASHRAE. Your
+            project specification always governs.</p>
+        </div>
+      </details>
+
+      <details class="snd-more">
+        <summary>What this tool does not calculate</summary>
+        <div class="snd-more__body">
+          <p><strong>Structure-borne noise.</strong> Vibration isolation, hanger selection and pipe
+            restraint appear nowhere in an airborne calculation. Below about 60&nbsp;Hz it becomes
+            hard to say whether an occupant is hearing sound or feeling vibration. As a rough
+            conversion for a vibrating surface treated as an infinite plane, sound pressure runs
+            about 34&nbsp;dB below the vibration level referenced to
+            10<sup>&minus;9</sup>&nbsp;m/s.</p>
+          <p><strong>Flanking paths.</strong> A lightweight roof under a rooftop unit will carry
+            radiated sound into the space below and bypass every attenuator in the duct. So will a
+            continuous ceiling void shared between two rooms.</p>
+          <p><strong>Diffuser and grille self-noise.</strong> On tight guest room criteria the
+            terminal is often the limiting element rather than the fan. Get the rating for the
+            terminal at its actual neck velocity and throw, and add it as a separate path.</p>
+          <p><strong>Duct-generated and regenerated noise.</strong> Dampers near a diffuser, sharp
+            transitions and high velocities all regenerate noise downstream of your attenuation. The
+            tool accepts these figures but will not invent them.</p>
+          <p><strong>Multi-fan tone phasing.</strong> Two fans running at slightly different speeds
+            produce a beat at the difference frequency, which is often far more objectionable than
+            either fan alone. A common drive across all condenser fans avoids it.</p>
+        </div>
+      </details>
+    </section>
+
+    <!-- 7 · Caveats -->
+    <section class="panel snd-panel" aria-labelledby="caveat-title">
+      <div class="panel__head"><h2 id="caveat-title">Before you put this in a submittal</h2></div>
+
+      <div class="notice notice--danger">
+        <p><strong>The attenuation values built into this tool are indicative typical figures, not
+          product data.</strong> They are here so you can size up a problem quickly and see which
+          direction to push. For a submittal, replace every element with the manufacturer's tested
+          insertion loss and state your source.</p>
+      </div>
+
+      <ul class="snd-caveats">
+        <li><strong>Check the external static the data was measured at.</strong> If your selection
+          runs at higher ESP than the test point, the fan is working harder and the published
+          spectrum understates it.</li>
+        <li><strong>Calculate every path, not just the convenient one.</strong> A supply path that
+          arrives 10&nbsp;dB below the total is contributing nothing. If your calculation passes and
+          the room does not, the path you left out is the reason.</li>
+        <li><strong>Below 63&nbsp;Hz, no attenuation is credited here.</strong> Published insertion
+          loss data rarely extends that low, and crediting some would be the optimistic error rather
+          than the safe one.</li>
+        <li><strong>Watch the letter, not just the number.</strong> A spectrum that passes NC but
+          rates rumbly will still generate complaints in a bedroom.</li>
+        <li><strong>Criteria and octave bands are instruments, not the objective.</strong> The
+          objective is that the majority of occupants do not find the sound objectionable, and that
+          judgement is subjective. A room can meet its number and still be wrong.</li>
+      </ul>
+    </section>
+
+  </main>
+
+  <footer data-site-footer></footer>
+  <script src="../../assets/js/global.js"></script>
+  <script src="sound.js"></script>
+</body>
+</html>

@@ -17,6 +17,13 @@ Seven browser tools for engineering office work:
   each step does to the air, the sensible and latent split, and a cooling coil's
   apparatus dew point and bypass factor. Properties follow the ASHRAE Handbook —
   Fundamentals, chapter 1.
+- **Sound & NC Calculator** — turns octave band sound power from an AHU, FCU or chiller
+  into the level a person actually hears, and rates it. Builds the path element by
+  element, combines multiple radiation paths, and gives an NC rating with the governing
+  band plus a full RC Mark II rating including the quality assessment index. Also rates a
+  spectrum you already have from a meter or a duct acoustics run. Criteria curves follow
+  ANSI/ASA S12.2; the room, path and propagation maths follows the ASHRAE Handbook —
+  Applications, chapter 49. Carries a background section on reading sound data sheets.
 - **AHU Batch Report Export** — a browser script that works through a Daikin project
   unit list and saves every unit report as RTF.
 - **Text Cleaner** — tidies manuscript text for a reader: straightens curly quotes,
@@ -96,6 +103,10 @@ tools/psychrometric-chart/
   psychro.js                            ASHRAE Ch.1 property equations (TN.psychro)
   chart.js                              SVG chart renderer (TN.psychroChart)
   app.js                                state rows, results, export, persistence
+tools/sound-level-calculator/
+  index.html
+  styles.css
+  sound.js                              bands, NC, RC Mark II, paths, SVG chart
 tools/text-cleaner/
   index.html
   styles.css
@@ -141,6 +152,15 @@ load, the CSS falls back to the system sans-serif and the layout still holds.
   `global.css`, so the 3D view follows the theme. The maths is exposed on
   `TN.cog` and `_dev/test-cog.js` exercises it under plain `node`, no
   dependencies: `node _dev/test-cog.js` from the repo root.
+- The Sound & NC Calculator carries ten octave bands, 16 Hz to 8 kHz. NC is rated over
+  63 Hz to 8 kHz per ANSI/ASA S12.2; RC Mark II needs the two lowest bands, which
+  catalogue data rarely publishes, so the tool rates what it has and says when the
+  letter is provisional. Insertion losses in the element library are indicative typical
+  values for early sizing, flagged as such in the interface — regenerated noise is not
+  modelled at all, because it depends on velocity and geometry the tool does not ask
+  for, so the user enters it instead of receiving a guess. `node _dev/test-sound.js`
+  runs under plain node with no dependencies and checks the curves, the A-weighting
+  round trip and the RC Mark II rating against the handbook's own worked example.
 - The Psychrometric Chart's maths is `tools/psychrometric-chart/psychro.js`, exposed
   on `TN.psychro`. Every function cites the ASHRAE Fundamentals chapter 1 equation it
   comes from, so a constant can be checked against the source rather than trusted.
