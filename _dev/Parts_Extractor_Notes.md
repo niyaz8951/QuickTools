@@ -232,12 +232,49 @@ Three keys, narrowest first:
    the header (`MONO`, `SE`, `ST`, `LN`, `MNG`) are counted as substrings of the model
    name, and every candidate on the top score is kept.
 
+#### Variants are matched as tokens, not substrings
+
+Step 3 alone cannot tell `XXN` from `XN`: searching for `XN` finds it inside `XXN`, so
+a sheet covering `ST-LN-XN` scored the XXN units just as highly and returned them too.
+A sheet name declares its variants as a **list**, so they are treated as a list —
+membership, not containment.
+
+Each model name is split around its capacity into three meaningful parts:
+
+```
+ALSFSE178.2ST134   ->  prefix "ALSFSE"  cap "178.2"  suffix variant "ST"
+ALSFSE178.2XXN134  ->  prefix "ALSFSE"  cap "178.2"  suffix variant "XXN"
+```
+
+- **Suffix variant** must be a token the sheet name declares. On
+  `1. ALS F 2 C. SE-XE~ST-LN-XN`, `ST` qualifies and `XXN` does not. This is right, and
+  the workbook proves it: `2. ALS F 2 C. SE-XE~XXN` is a separate sheet.
+- **Prefix variant** is whichever declared token the prefix *ends with* — `ALSFSE`
+  ends with `SE`, `ALSFXE` with `XE`. Longest match wins so a short token cannot
+  shadow a longer one.
+
+When a sheet covers more than one build, two rules pick between them:
+
+- A **qualifier** in the header wins. `Econ` (economiser) means the high-efficiency
+  build, which is `XE`. This is domain knowledge, not something derivable from the
+  files — it lives in `VARIANT_SYNONYMS` and is the place to add others.
+- With **no qualifier**, the first build the sheet name lists wins. `SE-XE` means SE
+  is the base build, so an unqualified header is the SE unit.
+
+Both of these are **inferences from the data, not documented rules**. They are the two
+lines to revisit first if a result looks wrong.
+
 #### One header legitimately maps to several units
 
 Sheet `Mono SE ST_LN` covers both the standard and low-noise variants, and parts list
 19 covers the condenserless (CU) units too. So `MNG Mono 029.1` maps to four DENV
 names — `EWAD100E-SS`, `EWAD100E-SL`, `ERAD120E-SS`, `ERAD120E-SL` — and the quantity
-in that column applies to all four. This is not a matching failure; it is what the
+in that column applies to all four. `1. 2C SE ST_LN` in the AWS workbook is the same
+story: the name says ST *and* LN, so two answers is the correct number.
+
+Across a five-workbook run, the token rules took the headers resolving to exactly one
+model from 80 to 102 out of 197. The 60 that remain ambiguous are sheets whose own
+name declares two variants — they are not failures to fix. This is not a matching failure; it is what the
 source data says. All matches are listed, separated by ` / `, and the count is in
 `Model Match`. Collapsing to one would be inventing an answer.
 
@@ -254,8 +291,13 @@ name. Skipped explicitly.
 
 #### Failure mode
 
-A *wrong* parts list number produces `no capacity match` and an empty cell, not a
-confident wrong answer — the capacity filter finds nothing in the wrong family and the
+A blank `DENV-Modelname` almost always means `no capacity match`: the capacity in the
+header is not in the overview for that parts list. That is a gap in the overview, not
+a matching failure — `ALS F 280.2 Econ` and `ALS F 297.2 Econ` have no row in it at
+all. Check `QA_Model_Map` for the count, and the overview for those capacities.
+
+A *wrong* parts list number produces the same `no capacity match` and an empty cell,
+rather than a confident wrong answer — the capacity filter finds nothing in the wrong family and the
 row is left blank. That is the desired direction to fail in.
 
 ### 2.12 Output

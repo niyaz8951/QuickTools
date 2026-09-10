@@ -310,6 +310,28 @@ function partsListNumber(fileName) {
   return m ? String(parseInt(m[1], 10)) : null;
 }
 
+/* Split a model name into the three parts that actually carry meaning:
+     ALSFSE178.2ST134  ->  prefix "ALSFSE", cap "178.2", suffix variant "ST"
+     ALSFSE178.2XXN134 ->  prefix "ALSFSE", cap "178.2", suffix variant "XXN"
+   The trailing digits are the refrigerant (134) and are ignored. Names with no
+   decimal capacity keep the whole string as the prefix and match as before. */
+function splitModelName(name) {
+  const norm = String(name).toUpperCase().replace(/[^A-Z0-9.]/g, '');
+  const m = norm.match(/^(.*?)(\d+\.\d+)(.*)$/);
+  if (!m) return { norm, prefix: norm, cap: null, suffixVar: '' };
+  return { norm, prefix: m[1], cap: m[2], suffixVar: (m[3].match(/^[A-Z]+/) || [''])[0] };
+}
+
+/* Words in a column header that name a unit variant rather than a capacity.
+   "Econ" (economiser) marks the high-efficiency build, which is XE in the MCQ
+   naming. This is a DOMAIN mapping, not something derivable from the files —
+   add to it when a parts list uses a qualifier the matcher does not know. */
+const VARIANT_SYNONYMS = {
+  ECON: ['XE'],
+  ECONOMISER: ['XE'],
+  ECONOMIZER: ['XE'],
+};
+
 function tokens(text) {
   return (String(text).toUpperCase().match(/[A-Z]+|[0-9]+(?:\.[0-9]+)?/g) || []);
 }
@@ -337,9 +359,12 @@ function buildModelMap(sheet) {
     const key = no ? String(parseInt(no, 10)) : '';
     if (!byList.has(key)) byList.set(key, []);
     const target = mcq || denv;
+    const parts = splitModelName(target);
     byList.get(key).push({
       mcq, denv,
-      mcqNorm: target.toUpperCase().replace(/[^A-Z0-9.]/g, ''),
+      mcqNorm: parts.norm,
+      prefix: parts.prefix,
+      suffixVar: parts.suffixVar,
     });
     pairs++;
   }
@@ -382,6 +407,48 @@ function matchModels(map, fileName, sheetName, attribute) {
     const hit = pool.filter((p) => wanted.some((w) => p.mcqNorm.includes(w)));
     if (hit.length) { candidates = hit; how = scope + '+capacity'; }
     else return { mcq: [], denv: [], how: 'no capacity match', count: 0 };
+  }
+
+  /* ---- narrow by variant, using EXACT tokens rather than substrings ----
+     Substring scoring cannot tell "XXN" from "XN": searching for XN finds it
+     inside XXN and both candidates tie, so a sheet covering ST-LN-XN kept the
+     XXN units too. The sheet name declares its variants as a list, so treat
+     them as a list — membership, not containment. */
+  const declared = tokens(sheetName).filter((t) => !isNumericToken(t));
+  const sheetSet = new Set(declared);
+  const attrSet = new Set(tokens(attribute).filter((t) => !isNumericToken(t)));
+
+  // (a) Suffix variant (ST / LN / XXN ...) must be one the sheet declares.
+  const bySuffix = candidates.filter((p) => p.suffixVar && sheetSet.has(p.suffixVar));
+  if (bySuffix.length) { candidates = bySuffix; how += '+variant'; }
+
+  /* (b) Prefix variant is whichever declared token the prefix ENDS with —
+     "ALSFSE" ends with SE, "ALSFXE" with XE. Longest match wins so a two-letter
+     token cannot shadow a longer one. */
+  const prefixVar = (p) => declared
+    .filter((t) => p.prefix.endsWith(t))
+    .sort((a, b) => b.length - a.length)[0] || '';
+
+  const present = new Set(candidates.map(prefixVar).filter(Boolean));
+  if (present.size > 1) {
+    const wanted = new Set();
+    for (const t of attrSet) for (const v of (VARIANT_SYNONYMS[t] || [])) wanted.add(v);
+
+    if (wanted.size) {
+      // The header names a qualifier: "ALS F 241.2 Econ" -> the XE build.
+      const byQual = candidates.filter((p) => wanted.has(prefixVar(p)));
+      if (byQual.length) { candidates = byQual; how += '+qualifier'; }
+    } else {
+      /* No qualifier, and the sheet covers more than one build. The sheet name
+         lists them in order — "SE-XE" — and the first is the base build, which
+         is what an unqualified header means. */
+      const first = declared.find((t) => present.has(t));
+      const byDefault = candidates.filter((p) => prefixVar(p) === first);
+      if (byDefault.length && byDefault.length < candidates.length) {
+        candidates = byDefault;
+        how += '+default(' + first + ')';
+      }
+    }
   }
 
   // Score on the remaining words; keep every candidate on the top score.
