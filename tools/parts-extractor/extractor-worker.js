@@ -278,6 +278,182 @@ function extractSheet(ws, fileName, sheetName, keepDash) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 4a. NEW format — EWAD parts lists that carry their own model names
+ *
+ * The newer EWAD workbooks put the full DENV model name in the row directly
+ * ABOVE the header, one per model column:
+ *
+ *   row 0   |            | EWAD-M-C    |      |         | EWAD300M-SSC | EWAD400M-SSC2 |
+ *   row 1   |            |             | Part Number | Details | 300    | 400           |
+ *   row 2   | Compressor | HS-3118 ... | P3313...    | HSS3118 | 1      | -             |
+ *
+ * So there is nothing to reconstruct and no overview to consult: the name is
+ * read straight off the sheet. Three things differ from the old format and
+ * each needs its own handling:
+ *
+ *   - The header need not say "Description". EWAD-M-C leaves that column
+ *     unlabelled, which is why the old-format rules dropped the file entirely.
+ *     A header here needs a part-number column and at least one model column;
+ *     the description column is inferred when it is not named.
+ *   - The section lives in column A beside the parts ("Compressor", "Liquid
+ *     Line"), not in a banner row above them. Unlabelled columns to the left
+ *     of the first labelled descriptor are therefore read as: first one
+ *     Section, second one (if Description is not named) Description.
+ *   - Model names can be missing or wrong in the source. Neither is repaired
+ *     — a model name this tool made up would be worse than a blank. Missing
+ *     names are left blank and wrong-looking ones are flagged, both in
+ *     QA_Model_Map.
+ * ------------------------------------------------------------------ */
+
+function classifyHeaderNew(row) {
+  const mapping = {};
+  const models = [];
+  for (let idx = 0; idx < row.length; idx++) {
+    const n = norm(row[idx]);
+    if (!n) continue;
+    let canon = LOOKUP[n];
+    if (canon === undefined) canon = LOOKUP_TIGHT[n.replace(/ /g, '')];
+    if (canon !== undefined) {
+      if (!(canon in mapping)) mapping[canon] = idx;
+    } else {
+      models.push([idx, String(row[idx]).replace(/\s+/g, ' ').trim()]);
+    }
+  }
+  const ok = (('Part Number DENV' in mapping) || ('Part Number DAE' in mapping))
+    && models.length >= MIN_MODEL_COLS;
+  return ok ? { mapping, models } : null;
+}
+
+/* The efficiency letter of an EWAD model name — the S or X of its "SS"/"XS"
+   style marker after the capacity: EWAD350M-XSB7 -> X, EWADC19M6SSC3 -> S. */
+function modelEfficiencyLetter(name, core) {
+  const upper = String(name).toUpperCase();
+  const at = core ? upper.indexOf(core) : -1;
+  const tail = at >= 0 ? upper.slice(at + core.length) : upper;
+  const m = tail.match(/([SX])[SLR]/);
+  return m ? m[1] : '';
+}
+
+/* Does a model name agree with the short code printed under it? Two checks,
+   both warnings only — the source value is always kept as it is:
+     - the code's capacity ("H15" of "H15S") appears in the model name;
+     - where the code ends in S or X, the model name's efficiency marker is
+       the same letter. This is what catches a sheet of "S" codes sitting
+       under a row of XS model names. */
+function checkModelName(code, name) {
+  if (!name) return 'no model name in sheet';
+  const c = String(code).toUpperCase().replace(/[^A-Z0-9.]/g, '');
+  const m = c.match(/^(.*?\d)([SX])$/);
+  const core = m ? m[1] : c;
+  const letter = m ? m[2] : '';
+  const upper = String(name).toUpperCase();
+  if (core && !upper.includes(core)) return `check: code ${code} not found in model name`;
+  if (letter) {
+    const eff = modelEfficiencyLetter(upper, core);
+    if (eff && eff !== letter) return `check: code says ${letter}, model name says ${eff}`;
+  }
+  return 'from sheet';
+}
+
+function extractSheetNew(ws, fileName, sheetName, keepDash) {
+  const { grid, raw } = readGrid(ws);
+  if (!grid.length) return { rows: [], headerVariants: 0, names: [] };
+
+  // Header: first row that names a part-number column and has model columns.
+  let h = -1; let hit = null;
+  for (let r = 0; r < raw.length; r++) {
+    const got = classifyHeaderNew(raw[r]);
+    if (got) { h = r; hit = got; break; }
+  }
+  if (h < 0) return { rows: [], headerVariants: 0, names: [] };
+
+  const { mapping, models } = hit;
+
+  /* Model names: the nearest non-empty row above the header. Read from the
+     UNEXPANDED grid, so a label merged across several columns lands only in
+     its own column rather than being copied onto its neighbours. */
+  let above = null;
+  for (let r = h - 1; r >= 0; r--) {
+    if (raw[r].some((v) => v)) { above = raw[r]; break; }
+  }
+  const nameFor = new Map();
+  for (const [idx] of models) {
+    const v = above && idx < above.length ? above[idx] : '';
+    // A model name has letters and digits; anything else is a stray label.
+    nameFor.set(idx, /[A-Z]/i.test(v) && /\d/.test(v) ? v : '');
+  }
+
+  // Unlabelled columns left of the first labelled descriptor.
+  const firstLabelled = Math.min(...Object.values(mapping));
+  const modelIdx = new Set(models.map((m) => m[0]));
+  const unlabelled = [];
+  for (let c = 0; c < firstLabelled; c++) if (!modelIdx.has(c)) unlabelled.push(c);
+  const sectionCol = unlabelled.length ? unlabelled[0] : -1;
+  const descCol = ('Description' in mapping)
+    ? mapping['Description']
+    : (unlabelled.length > 1 ? unlabelled[1] : -1);
+
+  const out = [];
+  let section = '';
+  let lastDesc = '';
+
+  for (let r = h + 1; r < grid.length; r++) {
+    const row = grid[r];
+    const rawRow = raw[r];
+    if (!rawRow.some((v) => v)) continue;
+    if (isTitleRow(rawRow)) continue;
+
+    /* Section from column A. A new section resets the carried description, so
+       a part left undescribed at the top of "Liquid Line" does not inherit
+       the last compressor's description. */
+    const sec = sectionCol >= 0 && sectionCol < row.length ? row[sectionCol] : '';
+    if (sec && sec !== section) { section = sec; lastDesc = ''; }
+
+    const rec = {};
+    for (const canon of DESCRIPTOR_ORDER) {
+      const i = canon === 'Description' ? descCol : mapping[canon];
+      rec[canon] = (i !== undefined && i >= 0 && i < row.length) ? row[i] : '';
+    }
+    if (rec['Description']) lastDesc = rec['Description'];
+    else rec['Description'] = lastDesc;
+
+    /* Description OR a part number — the same test as the old format. Lines
+       like "Economiser Expansion Valve" are real parts whose number has not
+       been issued yet; requiring a part number silently dropped them. */
+    if (!(rec['Description'] || rec['Part Number DENV'] || rec['Part Number DAE'])) continue;
+
+    const qty = models.map(([i, code]) => [i, code, i < row.length ? row[i] : '']);
+    if (!qty.some(([, , v]) => v)) continue;
+
+    for (const [i, code, val] of qty) {
+      if (val === '') continue;
+      if (!keepDash && (val.trim() === '-' || val.trim() === '0')) continue;
+      out.push({
+        'Source File': fileName,
+        'Sheet': sheetName,
+        'Section': section,
+        ...rec,
+        'Attribute': code,
+        'Value': val,
+        'MCQ-Modelname': '',
+        'DENV-Modelname': nameFor.get(i) || '',
+        'Model #': nameFor.get(i) ? '1' : '',
+        'Model Match': checkModelName(code, nameFor.get(i)),
+      });
+    }
+  }
+
+  const names = models.map(([i, code]) => ({
+    'Source File': fileName, 'Sheet': sheetName, 'Attribute': code,
+    'Matches': nameFor.get(i) ? 1 : 0,
+    'MCQ-Modelname': '',
+    'DENV-Modelname': nameFor.get(i) || '',
+    'Model Match': checkModelName(code, nameFor.get(i)),
+  }));
+  return { rows: out, headerVariants: 1, names };
+}
+
+/* ------------------------------------------------------------------ *
  * 4b. Model name mapping  (MCQ -> DENV)
  *
  * The parts lists identify a unit by a column header like "MNG Mono 029.1".
@@ -555,7 +731,13 @@ function aoaFromObjects(objs, cols) {
 }
 
 self.onmessage = async (e) => {
-  const { files, keepDash, mapFile } = e.data;
+  const { files, keepDash } = e.data;
+  /* 'old' (MCQ-era lists + overview map) or 'new' (EWAD lists that carry
+     their own model names). The map only means something to the old format,
+     so in new format it is ignored even if one was supplied. */
+  const format = e.data.format === 'new' ? 'new' : 'old';
+  const mapFile = format === 'old' ? e.data.mapFile : null;
+  const newNames = [];     // per-column model-name audit, new format only
   const started = Date.now();
 
   try {
@@ -598,10 +780,22 @@ self.onmessage = async (e) => {
           continue;
         }
         try {
-          const { rows: recs, headerVariants } = extractSheet(wb.Sheets[sheetName], f.name, sheetName, keepDash);
+          const got = format === 'new'
+            ? extractSheetNew(wb.Sheets[sheetName], f.name, sheetName, keepDash)
+            : extractSheet(wb.Sheets[sheetName], f.name, sheetName, keepDash);
+          const recs = got.rows;
+          const headerVariants = got.headerVariants;
+          if (got.names) for (const n of got.names) newNames.push(n);
           if (recs.length) {
             for (const r of recs) rows.push(r);
-            log.push({ 'Source File': f.name, 'Sheet': sheetName, 'Rows': recs.length, 'Status': `ok (${headerVariants} header layout(s))` });
+            let status = `ok (${headerVariants} header layout(s))`;
+            if (format === 'new' && got.names) {
+              const missing = got.names.filter((n) => !n['DENV-Modelname']).length;
+              const flagged = got.names.filter((n) => /^check:/.test(n['Model Match'])).length;
+              if (missing) status += ` · ${missing} column(s) with no model name`;
+              if (flagged) status += ` · ${flagged} model name(s) to check`;
+            }
+            log.push({ 'Source File': f.name, 'Sheet': sheetName, 'Rows': recs.length, 'Status': status });
           } else {
             log.push({ 'Source File': f.name, 'Sheet': sheetName, 'Rows': 0, 'Status': 'no parts table found' });
           }
@@ -642,6 +836,11 @@ self.onmessage = async (e) => {
        rather than 1,650. */
     const mapCache = new Map();
     const mapAudit = new Map();
+    if (format === 'new') {
+      for (const n of newNames) {
+        mapAudit.set(`${n['Source File']}\u0001${n['Sheet']}\u0001${n['Attribute']}`, n);
+      }
+    }
     if (modelMap) {
       for (const r of rows) {
         const key = `${r['Source File']}\u0001${r['Sheet']}\u0001${r['Attribute']}`;
@@ -722,7 +921,7 @@ self.onmessage = async (e) => {
 
     const wbOut = XLSX.utils.book_new();
     const outCols = rows.length
-      ? [...COLS, 'Attribute Raw', ...(modelMap ? MAP_COLS : [])]
+      ? [...COLS, 'Attribute Raw', ...((modelMap || format === 'new') ? MAP_COLS : [])]
       : COLS;
 
     if (expandedRows.length > MAX_OUTPUT_ROWS) {
@@ -785,7 +984,9 @@ self.onmessage = async (e) => {
       flagCount: flags.size,
       renameCount: renames.size,
       mapNote,
+      format,
       mapped: mapAudit.size ? [...mapAudit.values()].filter((a) => a.Matches > 0).length : 0,
+      flaggedNames: [...mapAudit.values()].filter((a) => /^check:/.test(a['Model Match'])).length,
       mapTotal: mapAudit.size,
       ms: Date.now() - started,
     }, [buf]);

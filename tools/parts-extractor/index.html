@@ -26,6 +26,16 @@
          Attribute and Value. Everything runs in your browser — nothing is uploaded.</p>
     </div>
 
+    <!-- 0 — File format. Chosen first because it decides which panels apply. -->
+    <section class="panel" aria-labelledby="step-format">
+      <div class="panel__head"><h2 id="step-format">File format</h2></div>
+      <div class="segmented" role="group" aria-label="File format" id="format-toggle">
+        <button type="button" data-format="old" aria-pressed="true">Old format · MCQ</button>
+        <button type="button" data-format="new" aria-pressed="false">New format · EWAD</button>
+      </div>
+      <p class="hint pe-format-note" id="format-note"></p>
+    </section>
+
     <!-- 1 — Workbooks -->
     <section class="panel" aria-labelledby="step-files">
       <div class="panel__head"><h2 id="step-files">Workbooks</h2></div>
@@ -41,8 +51,9 @@
       <p class="hint" id="file-note">No workbooks chosen yet.</p>
     </section>
 
-    <!-- 1b — Model name map -->
-    <section class="panel" aria-labelledby="step-map">
+    <!-- 1b — Model name map. Old format only: new-format sheets carry their
+         own model names, so this panel is hidden rather than left to confuse. -->
+    <section class="panel" aria-labelledby="step-map" id="map-panel">
       <div class="panel__head"><h2 id="step-map">Model name map <span class="pe-optional">optional</span></h2></div>
       <p class="muted">Add the Parts List Overview workbook and each row gains its DENV
         model name. The parts lists name a unit by its column header (<code>MNG Mono 029.1</code>);

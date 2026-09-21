@@ -307,6 +307,51 @@ anyway, because the parts list headers describe DENV units in the first place.
 **Some rows are the placeholder text `No parts list assigned`** rather than a model
 name. Skipped explicitly.
 
+#### The header must identify a unit
+
+A capacity is required. Without one, there is no match — `Qty`, `Remarks` or any
+label the dictionary does not recognise returns nothing and is logged as
+`no capacity in header`.
+
+This is not tidiness, it is a crash fix. The words being scored include the **sheet
+name's** tokens, which match every model in that family regardless of what the header
+says. So a header carrying no capacity still scored above zero and matched the whole
+pool — up to 2,968 models. Since every match becomes its own row, 399 parts expanded
+into over a million and the writer died with `Invalid array length`. That message was
+a runaway allocation, not a size limit.
+
+Three guards now, narrowest first:
+
+- **No capacity in the header → no match.** The capacity is the only thing that names
+  a specific unit.
+- **No name agreement → no match.** A capacity alone is not enough; the same number
+  appears across unrelated families.
+- **More than `MAX_MODEL_MATCHES` (12) → no match**, reported with the count. A header
+  resolving to dozens of models has been guessed at, not identified.
+
+Beyond those, the writer refuses to build a sheet over Excel's 1,048,576-row limit and
+says which stage produced the rows, instead of failing with an allocation error.
+
+#### Large results are written as CSV, not xlsx
+
+`XLSX.write` builds the whole worksheet as one object with a property per cell and
+then serialises it to a single XML string. Memory grows by several hundred bytes per
+cell, and the tab dies past roughly two to three million cells — reported as
+`Invalid array length` or `Too many properties to enumerate` depending on which
+allocation gives out first. Neither message names the cause, and **no guard makes a
+workbook that size writable**: measured in Node with a 1.8 GB heap, 100,000 rows x 19
+columns wrote fine and 150,000 ran out of memory. Dense mode did not help, because the
+XML string is built regardless.
+
+So above `XLSX_CELL_BUDGET` (1,200,000 cells, about 63,000 rows at the full column
+set) the parts table is written as **CSV** instead, from string chunks with no
+per-cell objects. Measured on the same machine: 264,000 rows in 7 seconds, 59 MB, 256 MB
+of heap. Excel and Power Query both open it directly.
+
+The log and QA sheets are a few hundred rows, so they stay in a small companion
+workbook and the page offers two downloads. Below the budget nothing changes — one
+xlsx, exactly as before.
+
 #### Failure mode
 
 A blank `DENV-Modelname` almost always means `no capacity match`: the capacity in the
@@ -343,6 +388,69 @@ by another word character — the test missed precisely the case it exists to ca
 Over-flagging here costs nothing; the sheet is meant to be read. A descriptor column with an unknown spelling gets treated as a model
 column and silently unpivoted into nonsense — this catches that, and the fix is
 always to add one alias to the dictionary.
+
+---
+
+## 2b. New format — EWAD lists that name their own models
+
+Chosen with the **File format** toggle at the top of the page. The newer EWAD workbooks
+print the full DENV model name in the row directly **above** the header, one per model
+column:
+
+```
+row 0 |            | EWAD-M-C    |             |         | EWAD300M-SSC | EWAD400M-SSC2
+row 1 |            |             | Part Number | Details | 300          | 400
+row 2 | Compressor | HS-3118 ... | P3313...    | HSS3118 | 1            | -
+```
+
+So there is nothing to reconstruct: `DENV-Modelname` is read straight off the sheet and
+the overview workbook is not used — its panel is hidden in this mode, and a map chosen
+earlier is withheld from the run but remembered if you switch back.
+
+### What is different from the old rules, and why
+
+- **The header need not say "Description".** EWAD-M-C leaves that column unlabelled, so
+  under the old rules the whole file produced nothing. Here a header needs a
+  part-number column and at least one model column; the description column is
+  inferred when unnamed.
+- **The section is column A beside the parts**, not a banner row above them. Unlabelled
+  columns left of the first labelled descriptor are read as Section, then (if
+  Description is not named) Description.
+- **A new section resets the carried description**, so a part left undescribed at the
+  top of "Liquid Line" does not inherit the last compressor's text.
+- **Description or part number** qualifies a row, same as the old format. Lines like
+  *Economiser Expansion Valve* are real parts with no number issued yet; an early
+  version required a part number and silently dropped 153 of them.
+
+On every sheet both rule sets can read, the row sets are identical — EWAD-M-B 15,263
+and EWAD-M6C 1,274 in both modes. The new mode adds sections and model names, and reads
+EWAD-M-C, which the old mode could not.
+
+### Model names are never repaired, only flagged
+
+`QA_Model_Map` gets one row per model column. `Model Match` says one of:
+
+| Value | Meaning |
+|---|---|
+| `from sheet` | name read from the row above, agrees with its code |
+| `no model name in sheet` | nothing printed above that column — left blank |
+| `check: code says S, model name says X` | the efficiency letter disagrees |
+| `check: code … not found in model name` | the capacity in the code is not in the name |
+
+Missing names are **not** filled in. `EWAD-MB 2C S Parts List` has none at all; building
+`EWAD290M-SSB?` from the code `290S` would need a suffix digit the sheet does not give,
+and a model name this tool made up is worse than a blank.
+
+The sample set shows why the check exists: `EWAD-MB 3C S Parts List` prints XS model
+names (`EWADH15M-XSB2`) over S codes (`H15S`) across all seven columns, and
+`3C X Parts List` has one stray `H18S`. Those are source-file errors. The values are
+kept as printed and flagged, so the fix happens in the source workbook.
+
+### Same output schema as the old format
+
+Identical columns in identical order: `MCQ-Modelname` is blank, `Model #` is 1. Output
+from the two modes can be stacked into one table without reshaping. The CSV switch for
+large results applies to both.
 
 ---
 

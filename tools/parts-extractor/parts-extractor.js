@@ -27,6 +27,34 @@
 
   var chosen = [];        // File objects
   var mapFile = null;     // the optional overview workbook
+  var format = 'old';     // 'old' (MCQ lists + map) | 'new' (EWAD lists, names on sheet)
+
+  /* ---------------- file format ---------------- */
+
+  var FORMAT_NOTES = {
+    old: 'MCQ-era parts lists. Add the Parts List Overview below to give each row its '
+      + 'DENV model name.',
+    new: 'EWAD parts lists that print the full model name above each column '
+      + '(EWAD300M-SSC over 300). Model names are read straight off the sheet — no map needed.',
+  };
+
+  function setFormat(next) {
+    format = next === 'new' ? 'new' : 'old';
+    var buttons = document.querySelectorAll('#format-toggle button');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].setAttribute('aria-pressed',
+        buttons[i].getAttribute('data-format') === format ? 'true' : 'false');
+    }
+    $('#map-panel').hidden = format === 'new';
+    $('#format-note').textContent = FORMAT_NOTES[format];
+    /* A finished result belongs to the format it was run in; showing it under
+       the other one would suggest it had been re-read. */
+    if (result) { result = null; resultPanel.hidden = true; }
+  }
+
+  document.querySelectorAll('#format-toggle button').forEach(function (b) {
+    b.addEventListener('click', function () { setFormat(b.getAttribute('data-format')); });
+  });
   var worker = null;
   var startedAt = 0;
   var result = null;      // { buffer, rowCount, ... }
@@ -202,14 +230,15 @@
     /* Files are read here, on the main thread, because FileReader in a worker
        adds nothing — the read itself is not what costs the seconds. Buffers
        are transferred, not copied. */
-    var all = mapFile ? chosen.concat([mapFile]) : chosen;
+    var useMap = format === 'old' && mapFile;
+    var all = useMap ? chosen.concat([mapFile]) : chosen;
     var buffers = [];
     var pending = all.length;
 
     function send() {
-      var mapBuf = mapFile ? buffers.pop() : null;   // the map is last in `all`
+      var mapBuf = useMap ? buffers.pop() : null;    // the map is last in `all`
       worker.postMessage(
-        { files: buffers, keepDash: keepDash.checked, mapFile: mapBuf },
+        { files: buffers, keepDash: keepDash.checked, mapFile: mapBuf, format: format },
         buffers.map(function (b) { return b.buffer; })
           .concat(mapBuf ? [mapBuf.buffer] : [])
       );
@@ -294,7 +323,11 @@
         + ' cells — too large for one Excel sheet, so the parts table is a CSV. '
         + 'Excel and Power Query both open it directly. The log and QA sheets are in the second file.');
     }
-    if (msg.mapTotal && msg.mapped < msg.mapTotal) {
+    if (msg.format === 'new' && msg.mapTotal) {
+      var missing = msg.mapTotal - msg.mapped;
+      if (missing) notes.push(missing + ' model column(s) have no model name printed above them — left blank.');
+      if (msg.flaggedNames) notes.push(msg.flaggedNames + ' model name(s) disagree with the code under them — see QA_Model_Map.');
+    } else if (msg.mapTotal && msg.mapped < msg.mapTotal) {
       notes.push((msg.mapTotal - msg.mapped) + ' column header(s) found no model match — see QA_Model_Map.');
     }
     runNote.textContent = notes.join(' · ');
@@ -347,5 +380,6 @@
     runNote.textContent = 'Extraction cancelled.';
   });
 
+  setFormat('old');
   syncRun();
 })();
