@@ -42,7 +42,8 @@
     'chevron-down': '<path d="m6 9 6 6 6-6"/>',
     crosshair: '<circle cx="12" cy="12" r="9"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6"/>',
     psychro: '<path d="M4 4v14a2 2 0 0 0 2 2h14"/><path d="M20 7c-7 1-11 5-13 12"/><circle cx="14" cy="14" r="1.6"/>',
-    acoustic: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>'
+    acoustic: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>',
+    coil: '<path d="M3 5h15a2 2 0 0 1 0 4H6a2 2 0 0 0 0 4h12a2 2 0 0 1 0 4H3"/><path d="M3 21h18"/>'
   };
 
   function icon(name, size) {
@@ -86,6 +87,7 @@
     { href: 'tools/container-calculator/', title: 'Container Calculator' },
     { href: 'tools/centre-of-gravity/', title: 'Centre of Gravity' },
     { href: 'tools/parts-extractor/', title: 'Parts List Extractor' },
+    { href: 'tools/coil-data-extractor/', title: 'Coil Data Extractor' },
     { href: 'tools/psychrometric-chart/', title: 'Psychrometric Chart' },
     { href: 'tools/sound-level-calculator/', title: 'Sound & NC Calculator' },
     { href: 'tools/text-cleaner/', title: 'Text Cleaner' },

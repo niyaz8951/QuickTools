@@ -1,6 +1,6 @@
 # Thinkneering — Tools
 
-Seven browser tools for engineering office work:
+Nine browser tools for engineering office work:
 
 - **Compliance Maker** — turns a specification PDF (or pasted text) into a numbered
   compliance matrix and exports it as a formatted `.xlsx`.
@@ -12,6 +12,10 @@ Seven browser tools for engineering office work:
 - **Parts List Extractor** — reads a set of spare parts list workbooks, finds the
   header row on every sheet, maps the varying spellings to one schema, expands
   merged cells and unpivots the per-model quantity columns into one long table.
+- **Coil Data Extractor** — reads coil selection quotations (WinCoil, as Word
+  `.docx` or PDF) and writes one Excel row per coil: reference, coil type, every
+  physical, air and fluid field with its unit, coil code, quantity and the quotation
+  header. Word files are read from their XML; PDFs through pdf.js.
 - **Psychrometric Chart** — plot as many air states as a system has, joined into a
   process chain, on an ASHRAE-style chart. Gives every property of each state, what
   each step does to the air, the sensible and latent split, and a cooling coil's
