@@ -282,6 +282,35 @@ Sheet size grows with the ambiguity: on a five-workbook run, 30,532 rows became
 46,687 — about 1.5x. With no overview supplied the grain is unchanged and the model
 columns are absent entirely.
 
+#### The capacity is matched as a number, not as text
+
+`includes()` cannot tell a number from a run of characters: `65.2` sits inside `165.2`.
+Because leading zeros are inconsistent between headers and model names, the matcher
+tries the zero-stripped form too — so a header for **065.2 also claimed the 165.2
+unit**, and the two headers came back sharing a model name. That is what a user sees as
+"the same model name on many different rows".
+
+`hasCapacity()` requires a non-digit on the left and no digit on the right, so the match
+is a whole number. A "." on the right is still allowed, so a header carrying only the
+whole part (`184`) still matches a model built on `184.2`.
+
+Real collisions in this overview: **065.2/165.2 in lists 21 and 31**, and
+**049.2/149.2 plus 057.2/157.2 in list 30**. Sweeping every capacity in every list —
+457 queries across 31 lists — the old code returned a wrong-capacity model on 4 of
+them and the fixed code on none.
+
+#### "--" is not a model name
+
+Parts list 20 has `--` in the DENV column on **all 77 of its rows**. Every header in
+that workbook therefore came back with the same `--`, which is indistinguishable from a
+matching fault. A dash-only, `n/a`, `tbd` or `none` value is now blanked. The MCQ name
+on those rows is real, so the entry is kept and still matched on; only the DENV name is
+empty, and `QA_Model_Map` shows the gap so it can be fixed in the overview.
+
+`joinNames()` collapses an all-blank list to `""` rather than `" / "`. Only the
+all-blank case collapses, so the index alignment the one-row-per-model split depends on
+is preserved wherever any real name exists.
+
 #### One header legitimately maps to several units
 
 Sheet `Mono SE ST_LN` covers both the standard and low-noise variants, and parts list
@@ -425,6 +454,25 @@ earlier is withheld from the run but remembered if you switch back.
 On every sheet both rule sets can read, the row sets are identical — EWAD-M-B 15,263
 and EWAD-M6C 1,274 in both modes. The new mode adds sections and model names, and reads
 EWAD-M-C, which the old mode could not.
+
+### Sheets covered
+
+Verified against EWAD-M-B, EWAD-M-C, EWAD-MZB, EWAD-MZC and EWAD-MZD: 18 parts sheets,
+25,087 rows, 166 of 183 model columns named. The layouts differ more than they look:
+
+| | model-name row | header row | gap between them | DENV part no. |
+|---|---|---|---|---|
+| EWAD-M-C | 0 | 1 | none | no |
+| EWAD-MZC | 1 | 2 | none | yes |
+| EWAD-MZB, EWAD-MZD | 1 | 3 | one blank row | no |
+
+Taking the **nearest non-empty row above the header** rather than "the row above" is what
+makes the blank-row layouts work. The header row itself is found by searching, so its
+position is never assumed.
+
+A section label missing from column A is reported, not invented. `EWAD-MZB`'s DUAL "XS"
+and "PS" sheets omit the COMPRESSOR label that their SS sheet carries, leaving 131 and
+194 rows with no section; the log says so per sheet.
 
 ### Model names are never repaired, only flagged
 
