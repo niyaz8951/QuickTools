@@ -550,13 +550,6 @@ function tokens(text) {
 
 function isNumericToken(t) { return /^[0-9]/.test(t); }
 
-/* Is `cap` present in `hay` as a whole NUMBER rather than as a run of
-   characters? A digit immediately to the left means we have landed inside a
-   longer number — looking for 65.2 and finding it inside 165.2 — and a digit
-   to the right means the same on the other end. A "." to the right is fine, so
-   a header carrying only the whole part ("184") still matches a model built on
-   "184.2". Written with indexOf rather than a lookbehind so it runs in every
-   browser. */
 /* The letters that follow a capacity inside a normalised name.
    "EWAD190TZSSB1" after "190" -> "TZSSB";  "190S" after "190" -> "S". */
 function tailAfter(norm, cap) {
@@ -586,15 +579,33 @@ function commonPrefix(list) {
   return p;
 }
 
-function hasCapacity(hay, cap) {
+/* Where does `cap` sit inside `hay`, and how cleanly?
+     'exact' - it is the whole digit run:      "160" in "EWAD160TZSSB1"
+     'loose' - it starts the run but more
+               digits follow:                  "400" in "EWYS4004ZXSB2"
+                                               (the 4 belongs to the "4Z" family code)
+     null    - it does not start a run at all: "65.2" inside "165.2"
+
+   The LEFT edge is the one that matters and is strict: a digit or a "." before
+   the match means we have landed inside a longer number, which is how a header
+   for 065.2 used to claim the 165.2 unit. The right edge is reported rather
+   than enforced, because a family code can begin with a digit — "EWYS4004Z" is
+   capacity 400 followed by "4Z" — and rejecting those lost every 4Z family.
+   The caller prefers exact matches and falls back to loose ones only when no
+   exact match exists, so a hypothetical "1600" cannot steal a header for 160
+   while a real "4004Z" still resolves. */
+function capacityMatch(hay, cap) {
   let i = hay.indexOf(cap);
+  let loose = false;
   while (i !== -1) {
     const before = i === 0 ? '' : hay.charAt(i - 1);
-    const after = hay.charAt(i + cap.length);
-    if (!/[0-9.]/.test(before) && !/[0-9]/.test(after)) return true;
+    if (!/[0-9.]/.test(before)) {
+      if (!/[0-9]/.test(hay.charAt(i + cap.length))) return 'exact';
+      loose = true;
+    }
     i = hay.indexOf(cap, i + 1);
   }
-  return false;
+  return loose ? 'loose' : null;
 }
 
 /* Joining names for display. A parts list whose DENV names are all blank would
@@ -711,11 +722,17 @@ function matchModels(map, fileName, sheetName, attribute) {
       if (stripped && stripped !== c) wanted.push(stripped);
       wanted.push('0' + c);
     }
-    const hit = [];
+    const exact = []; const loose = [];
     for (const p of pool) {
-      const w = wanted.find((x) => hasCapacity(p.mcqNorm, x));
-      if (w) { hit.push(p); capOf.set(p, w); }
+      for (const w of wanted) {
+        const q = capacityMatch(p.mcqNorm, w);
+        if (!q) continue;
+        capOf.set(p, w);
+        (q === 'exact' ? exact : loose).push(p);
+        break;
+      }
     }
+    const hit = exact.length ? exact : loose;
     if (hit.length) { candidates = hit; how = scope + '+capacity'; }
     else return { mcq: [], denv: [], how: 'no capacity match', count: 0 };
 
