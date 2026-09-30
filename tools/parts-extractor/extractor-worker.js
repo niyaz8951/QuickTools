@@ -443,6 +443,8 @@ function extractSheetNew(ws, fileName, sheetName, keepDash) {
     }
   }
 
+  const blankSection = out.filter((r) => !r['Section']).length;
+
   const names = models.map(([i, code]) => ({
     'Source File': fileName, 'Sheet': sheetName, 'Attribute': code,
     'Matches': nameFor.get(i) ? 1 : 0,
@@ -450,7 +452,7 @@ function extractSheetNew(ws, fileName, sheetName, keepDash) {
     'DENV-Modelname': nameFor.get(i) || '',
     'Model Match': checkModelName(code, nameFor.get(i)),
   }));
-  return { rows: out, headerVariants: 1, names };
+  return { rows: out, headerVariants: 1, names, blankSection };
 }
 
 /* ------------------------------------------------------------------ *
@@ -538,6 +540,31 @@ function tokens(text) {
 
 function isNumericToken(t) { return /^[0-9]/.test(t); }
 
+/* Is `cap` present in `hay` as a whole NUMBER rather than as a run of
+   characters? A digit immediately to the left means we have landed inside a
+   longer number — looking for 65.2 and finding it inside 165.2 — and a digit
+   to the right means the same on the other end. A "." to the right is fine, so
+   a header carrying only the whole part ("184") still matches a model built on
+   "184.2". Written with indexOf rather than a lookbehind so it runs in every
+   browser. */
+function hasCapacity(hay, cap) {
+  let i = hay.indexOf(cap);
+  while (i !== -1) {
+    const before = i === 0 ? '' : hay.charAt(i - 1);
+    const after = hay.charAt(i + cap.length);
+    if (!/[0-9.]/.test(before) && !/[0-9]/.test(after)) return true;
+    i = hay.indexOf(cap, i + 1);
+  }
+  return false;
+}
+
+/* Joining names for display. A parts list whose DENV names are all blank would
+   otherwise render as " / ", which reads like a value rather than a gap. Only
+   the all-blank case collapses, so index alignment with the MCQ list — which
+   the one-row-per-model split depends on — is preserved wherever any real name
+   exists. */
+function joinNames(a) { return a.some(Boolean) ? a.join(' / ') : ''; }
+
 /* Build the lookup once per run: { partsListNo: [{ mcq, mcqNorm, denv }] }. */
 function buildModelMap(sheet) {
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
@@ -547,14 +574,22 @@ function buildModelMap(sheet) {
     // Header spellings differ between revisions of the overview file.
     const no = String(r['Parts list n°'] ?? r['Parts list no'] ?? r['Parts List'] ?? '').trim();
     const mcq = String(r['MCQ-Modelname'] ?? r['MCQ Modelname'] ?? '').trim();
-    const denv = String(r['DENV-Modelname'] ?? r['DENV Modelname'] ?? '').trim();
+    let denv = String(r['DENV-Modelname'] ?? r['DENV Modelname'] ?? '').trim();
+
+    /* "--" is not a model name, it is an empty cell someone typed a dash into.
+       Parts list 20 carries it on all 77 of its rows, so every header in that
+       workbook came back with the same "--" and looked like a matching fault
+       rather than the gap in the overview that it is. The MCQ name on those
+       rows is real, so the entry is kept and matched on; only the DENV name is
+       blanked. */
+    if (/^[-\u2013\u2014\s]+$/.test(denv) || /^(n\/?a|tbd|none)$/i.test(denv)) denv = '';
+
     /* Over half the overview has a DENV name and NO MCQ name — newer units
        with no McQuay equivalent. Requiring both would discard them and leave
-       every parts list built on those models unmatched, so the DENV name is
-       what is required and the MCQ name is a bonus. Matching then runs against
-       whichever name exists, which is right either way: for a DENV-only family
-       the parts list headers describe DENV units in the first place. */
-    if (!denv) continue;
+       every parts list built on those models unmatched, so one or the other is
+       required and matching runs against whichever exists: for a DENV-only
+       family the parts list headers describe DENV units in the first place. */
+    if (!mcq && !denv) continue;
     if (/^no parts list/i.test(mcq)) continue;   // placeholder text, not a model
     const key = no ? String(parseInt(no, 10)) : '';
     if (!byList.has(key)) byList.set(key, []);
@@ -609,8 +644,13 @@ function matchModels(map, fileName, sheetName, attribute) {
   }
 
   {
-    /* The capacity must appear. Leading zeros are inconsistent between the
-       header and the model name, so "29.1" and "029.1" are both tried. */
+    /* The capacity must appear AS A NUMBER. Leading zeros are inconsistent
+       between the header and the model name, so "29.1" and "029.1" are both
+       tried — and that is exactly what made a plain `includes` unsafe: "65.2"
+       sits inside "165.2", so a header for 065.2 also claimed the 165.2 unit
+       and the two headers came back sharing a model name. Real collisions in
+       the overview: 065.2/165.2 in lists 21 and 31, 049.2/149.2 and
+       057.2/157.2 in list 30. */
     const wanted = [];
     for (const c of caps) {
       wanted.push(c);
@@ -618,7 +658,7 @@ function matchModels(map, fileName, sheetName, attribute) {
       if (stripped && stripped !== c) wanted.push(stripped);
       wanted.push('0' + c);
     }
-    const hit = pool.filter((p) => wanted.some((w) => p.mcqNorm.includes(w)));
+    const hit = pool.filter((p) => wanted.some((w) => hasCapacity(p.mcqNorm, w)));
     if (hit.length) { candidates = hit; how = scope + '+capacity'; }
     else return { mcq: [], denv: [], how: 'no capacity match', count: 0 };
   }
@@ -794,6 +834,12 @@ self.onmessage = async (e) => {
               const flagged = got.names.filter((n) => /^check:/.test(n['Model Match'])).length;
               if (missing) status += ` · ${missing} column(s) with no model name`;
               if (flagged) status += ` · ${flagged} model name(s) to check`;
+              /* Rows above the first section label in column A. EWAD-MZB's
+                 DUAL "XS" and "PS" sheets simply omit the COMPRESSOR label
+                 that the SS sheet carries, so their first block of parts has
+                 no section. Naming it here would be inventing it; reporting
+                 the count puts it where someone can fix the workbook. */
+              if (got.blankSection) status += ` · ${got.blankSection} row(s) before the first section label`;
             }
             log.push({ 'Source File': f.name, 'Sheet': sheetName, 'Rows': recs.length, 'Status': status });
           } else {
@@ -851,13 +897,13 @@ self.onmessage = async (e) => {
           mapAudit.set(key, {
             'Source File': r['Source File'], 'Sheet': r['Sheet'], 'Attribute': r['Attribute'],
             'Matches': hit ? hit.count : 0,
-            'MCQ-Modelname': hit ? hit.mcq.join(' / ') : '',
-            'DENV-Modelname': hit ? hit.denv.join(' / ') : '',
+            'MCQ-Modelname': hit ? joinNames(hit.mcq) : '',
+            'DENV-Modelname': hit ? joinNames(hit.denv) : '',
             'Model Match': hit ? hit.how : 'no map',
           });
         }
-        r['MCQ-Modelname'] = hit ? hit.mcq.join(' / ') : '';
-        r['DENV-Modelname'] = hit ? hit.denv.join(' / ') : '';
+        r['MCQ-Modelname'] = hit ? joinNames(hit.mcq) : '';
+        r['DENV-Modelname'] = hit ? joinNames(hit.denv) : '';
         r['Model Match'] = hit ? `${hit.count} · ${hit.how}` : 'no match';
       }
     }
