@@ -299,6 +299,42 @@ Real collisions in this overview: **065.2/165.2 in lists 21 and 31**, and
 457 queries across 31 lists — the old code returned a wrong-capacity model on 4 of
 them and the fixed code on none.
 
+#### A capacity has two or more digits
+
+A lone digit is a series or revision marker, never a capacity. Treating one as a
+capacity is ruinous: `600VZ SSA1` tokenises to `600, VZ, SSA, 1`, and that trailing
+`1` — from `SSA1`, not a capacity at all — matches **every** model whose name ends in
+`A1`. Every EWWD-VZ header then claimed the same set of models. Capacity tokens now
+need a decimal or two digits.
+
+#### The MCQ column sometimes holds a family label
+
+The first row of many lists carries the family in the MCQ column — `EWWD-VZ`,
+`EWAD-TZ-B`, `EWYD~4Z` — rather than a model name. Matching ran against the MCQ name
+whenever one existed, so that row matched nothing and **the model it hid was the first
+of its family**: `EWWD600VZ-SSA1` and `EWAD160TZSSB1` were both missing from their own
+results. A label carries no capacity, so a name without one now falls through to the
+DENV side. This took the entries with no capacity in their match target from **43 to
+5**, and model reachability across the overview to 2,886 of 2,891.
+
+The remaining 5 have a family label in the *DENV* column too (`EWAD-M-B`, `EWAD-MZC`,
+`EWAD-MZD`, `EWAH-MZD`, `EWWQ~KB/KA`), so there is no model name on those rows at all —
+a gap in the overview, not in the matching.
+
+#### The build letter after the capacity
+
+`190S`, `190X` and `190P` are three different builds and were returning the same nine
+models. The letters after the capacity carry the distinction: the header says `S`, the
+model says `TZ` then `SSB1`. `TZ` is the family marker, shared by every model in the
+list, so it is found as the common prefix of all their tails and removed from both
+sides; what remains is the build. Each of those headers now returns its own three noise
+variants.
+
+Families whose capacity is a decimal have no letters directly after it (`178.2` is
+followed by `.`), so they produce an empty tail here and are left to the prefix/suffix
+rules above untouched. The narrowing is also skipped whenever it would leave nothing,
+so it can never turn a match into a blank.
+
 #### "--" is not a model name
 
 Parts list 20 has `--` in the DENV column on **all 77 of its rows**. Every header in
