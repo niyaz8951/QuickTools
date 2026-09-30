@@ -445,8 +445,18 @@ function extractSheetNew(ws, fileName, sheetName, keepDash) {
 
   const blankSection = out.filter((r) => !r['Section']).length;
 
+  /* One audit row per model COLUMN, carrying that column's letter.
+     A sheet can hold several model blocks side by side and reuse a code
+     between them — EWAH-MZD's Foglio1 has 96 model columns whose codes reduce
+     to 66 distinct values, so "400" is EWAH400MZSSD1 in one block,
+     EWAH400MZSSD2 in another and EWAH400MZPSD1 in a third. Keyed on the code
+     alone those columns collapse and the audit reports one arbitrary name for
+     all three. Parts_Long was always right, because it reads the name at the
+     column the quantity came from; only this sheet was lying. */
   const names = models.map(([i, code]) => ({
-    'Source File': fileName, 'Sheet': sheetName, 'Attribute': code,
+    'Source File': fileName, 'Sheet': sheetName,
+    'Column': XLSX.utils.encode_col(i),
+    'Attribute': code,
     'Matches': nameFor.get(i) ? 1 : 0,
     'MCQ-Modelname': '',
     'DENV-Modelname': nameFor.get(i) || '',
@@ -547,6 +557,35 @@ function isNumericToken(t) { return /^[0-9]/.test(t); }
    a header carrying only the whole part ("184") still matches a model built on
    "184.2". Written with indexOf rather than a lookbehind so it runs in every
    browser. */
+/* The letters that follow a capacity inside a normalised name.
+   "EWAD190TZSSB1" after "190" -> "TZSSB";  "190S" after "190" -> "S". */
+function tailAfter(norm, cap) {
+  const i = norm.indexOf(cap);
+  if (i < 0) return '';
+  const m = norm.slice(i + cap.length).match(/^[A-Z]+/);
+  return m ? m[0] : '';
+}
+
+/* A model's own tail, found from the first run of two or more digits in it.
+   A decimal capacity ("178.2") is followed by "." rather than a letter, so
+   those families return "" and are left to the existing rules untouched. */
+function modelTail(norm) {
+  const m = norm.match(/\d{2,}/);
+  return m ? tailAfter(norm, m[0]) : '';
+}
+
+function commonPrefix(list) {
+  if (!list.length) return '';
+  let p = list[0];
+  for (const s of list) {
+    let k = 0;
+    while (k < p.length && k < s.length && p.charAt(k) === s.charAt(k)) k++;
+    p = p.slice(0, k);
+    if (!p) break;
+  }
+  return p;
+}
+
 function hasCapacity(hay, cap) {
   let i = hay.indexOf(cap);
   while (i !== -1) {
@@ -593,7 +632,14 @@ function buildModelMap(sheet) {
     if (/^no parts list/i.test(mcq)) continue;   // placeholder text, not a model
     const key = no ? String(parseInt(no, 10)) : '';
     if (!byList.has(key)) byList.set(key, []);
-    const target = mcq || denv;
+    /* The MCQ column carries the FAMILY LABEL on the first row of many lists —
+       "EWWD-VZ", "EWAD-TZ-B", "EWYD~4Z" — rather than a model name. Matching
+       on it made that row unreachable, and since it is always the first row,
+       the model it hides is the first of its family: EWWD600VZ-SSA1 and
+       EWAD160TZSSB1 were both missing from their own results. A label carries
+       no capacity, so a name without one falls through to the DENV side.
+       43 rows in the current overview are affected. */
+    const target = /\d{2,}|\d+\.\d+/.test(mcq) ? mcq : (denv || mcq);
     const parts = splitModelName(target);
     byList.get(key).push({
       mcq, denv,
@@ -623,11 +669,18 @@ function matchModels(map, fileName, sheetName, attribute) {
 
   const attrTokens = tokens(attribute);
   const sheetTokens = tokens(sheetName);
-  const caps = attrTokens.filter(isNumericToken);
+  /* A CAPACITY IS A NUMBER OF TWO OR MORE DIGITS, or a decimal.
+     A lone digit is a series or revision marker, never a capacity — and it is
+     ruinous as one: the header "600VZ SSA1" tokenises to 600, VZ, SSA, 1, and
+     that trailing "1" (from SSA1) matches EVERY model whose name ends in A1.
+     Every EWWD-VZ header then claimed the same set of models, which is exactly
+     the "same model names on many different rows" complaint. */
+  const caps = attrTokens.filter((t) => isNumericToken(t) && (t.indexOf('.') >= 0 || t.length >= 2));
   const words = [...attrTokens, ...sheetTokens].filter((t) => !isNumericToken(t) && t.length >= 2);
 
   let candidates = pool;
   let how = scope;
+  const capOf = new Map();   // which capacity each candidate matched on
 
   /* THE HEADER ITSELF MUST IDENTIFY A UNIT.
      Without this, a column header that carries no capacity — "Qty", "Remarks",
@@ -658,9 +711,37 @@ function matchModels(map, fileName, sheetName, attribute) {
       if (stripped && stripped !== c) wanted.push(stripped);
       wanted.push('0' + c);
     }
-    const hit = pool.filter((p) => wanted.some((w) => hasCapacity(p.mcqNorm, w)));
+    const hit = [];
+    for (const p of pool) {
+      const w = wanted.find((x) => hasCapacity(p.mcqNorm, x));
+      if (w) { hit.push(p); capOf.set(p, w); }
+    }
     if (hit.length) { candidates = hit; how = scope + '+capacity'; }
     else return { mcq: [], denv: [], how: 'no capacity match', count: 0 };
+
+    /* ---- narrow by the variant letters that follow the capacity ----
+       "190S", "190X" and "190P" are three different builds, and without this
+       all three returned the same nine models. The letters after the capacity
+       carry that: the header says "S", the model says "TZ" + "SSB1". "TZ" is
+       the family marker, shared by every model in the list, so it is found as
+       the common prefix of all their tails and removed from both sides; what
+       remains is the variant. Families whose capacity is a decimal have no
+       letters directly after it, so they return "" here and are left to the
+       existing prefix/suffix rules. */
+    const famPrefix = commonPrefix(pool.map((p) => modelTail(p.mcqNorm)).filter(Boolean));
+    const attrNorm = String(attribute).toUpperCase().replace(/[^A-Z0-9.]/g, '');
+    let attrTail = tailAfter(attrNorm, capOf.get(candidates[0]) || '');
+    if (famPrefix && attrTail.indexOf(famPrefix) === 0) attrTail = attrTail.slice(famPrefix.length);
+
+    if (attrTail) {
+      const byVariant = candidates.filter((p) => {
+        let v = modelTail(p.mcqNorm);
+        if (famPrefix && v.indexOf(famPrefix) === 0) v = v.slice(famPrefix.length);
+        return v && v.indexOf(attrTail) === 0;
+      });
+      // Only narrow when it leaves something; never turn a match into nothing.
+      if (byVariant.length) { candidates = byVariant; how += '+build'; }
+    }
   }
 
   /* ---- narrow by variant, using EXACT tokens rather than substrings ----
@@ -884,7 +965,7 @@ self.onmessage = async (e) => {
     const mapAudit = new Map();
     if (format === 'new') {
       for (const n of newNames) {
-        mapAudit.set(`${n['Source File']}\u0001${n['Sheet']}\u0001${n['Attribute']}`, n);
+        mapAudit.set(`${n['Source File']}\u0001${n['Sheet']}\u0001${n['Column']}`, n);
       }
     }
     if (modelMap) {
@@ -1011,7 +1092,7 @@ self.onmessage = async (e) => {
          rows rather than tens of thousands. */
       XLSX.utils.book_append_sheet(wbOut,
         XLSX.utils.aoa_to_sheet(aoaFromObjects([...mapAudit.values()],
-          ['Source File', 'Sheet', 'Attribute', 'Matches', 'MCQ-Modelname', 'DENV-Modelname', 'Model Match'])),
+          ['Source File', 'Sheet', 'Column', 'Attribute', 'Matches', 'MCQ-Modelname', 'DENV-Modelname', 'Model Match'])),
         'QA_Model_Map');
     }
 
