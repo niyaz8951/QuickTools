@@ -419,6 +419,25 @@ xlsx, exactly as before.
 
 #### Failure mode
 
+#### A family code can begin with a digit
+
+`EWYS4004ZXSB2` is capacity **400** followed by the `4Z` family code. An earlier version
+of the boundary check required a non-digit on the right as well as the left, which
+rejected that and lost every 4Z family — lists 41, 65 and their relatives — after they
+had been matching fine.
+
+The left edge is the one that matters and stays strict: a digit or a "." before the
+match means we have landed inside a longer number, which is the 065.2-inside-165.2
+fault. The right edge is now *reported* rather than enforced. `capacityMatch` returns
+`exact` when the capacity is the whole digit run and `loose` when more digits follow,
+and the caller keeps the exact matches when any exist, falling back to loose ones only
+when none do. So a hypothetical `1600` cannot steal a header for `160`, while a real
+`4004Z` still resolves.
+
+Across the overview, models reachable from their own capacity went from 2,925 of 2,968
+to **2,886 of 2,891** — the denominator drops because list 20's 77 placeholder rows no
+longer count as models.
+
 A blank `DENV-Modelname` almost always means `no capacity match`: the capacity in the
 header is not in the overview for that parts list. That is a gap in the overview, not
 a matching failure — `ALS F 280.2 Econ` and `ALS F 297.2 Econ` have no row in it at
